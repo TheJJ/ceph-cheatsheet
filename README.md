@@ -38,8 +38,9 @@ Setup
 
 What [hardware?](http://docs.ceph.com/docs/master/start/hardware-recommendations/)
 
-Ceph needs an odd number of >=1 MONs to [get a quorum](https://en.wikipedia.org/wiki/Paxos_(computer_science))
-We use the [manual method](http://docs.ceph.com/docs/master/install/manual-deployment/).
+Ceph needs an odd number of >=1 MONs to [get a quorum](https://en.wikipedia.org/wiki/Paxos_(computer_science)).
+
+For better understanding the setup, I recommend the [manual method](http://docs.ceph.com/docs/master/install/manual-deployment/).
 
 For config options, see the [upstream documentation](http://docs.ceph.com/docs/master/rados/configuration/ceph-conf/).
 
@@ -90,7 +91,12 @@ The manager provides a [shiny dashboard](http://docs.ceph.com/docs/master/mgr/da
 
 [How to add devices](http://docs.ceph.com/docs/master/ceph-volume/lvm/prepare/).
 
-Add a [BlueStore](http://docs.ceph.com/docs/master/rados/configuration/bluestore-config-ref/) device, with the help of lvm.
+Before adding OSDs, you can do `ceph osd set noin` so new disks are not filled automatically.
+Once you want it to be filled, do `ceph osd in $osdid`.
+
+#### Add BlueStore OSD
+
+Add a [BlueStore](http://docs.ceph.com/docs/master/rados/configuration/bluestore-config-ref/) device, with the help of LVM. In the LVM tags, metainfo is stored.
 
 The data and journal (WAL) and keyvalue-DB can be placed on different devices (HDD and SSD).
 
@@ -255,8 +261,9 @@ Recovery speed settings:
 
 
 ### Random infos
-[Network config](http://docs.ceph.com/docs/master/rados/configuration/network-config-ref/)
-[Authentication config](http://docs.ceph.com/docs/master/rados/configuration/auth-config-ref/)
+
+* [Network config](http://docs.ceph.com/docs/master/rados/configuration/network-config-ref/)
+* [Authentication config](http://docs.ceph.com/docs/master/rados/configuration/auth-config-ref/)
 
 
 Operation
@@ -550,7 +557,7 @@ ceph.cephx_lockbox_secret=                          # leave empty
 ceph.cluster_fsid=cluster_fs_id
 ceph.cluster_name=ceph
 ceph.crush_device_class=None
-ceph.encrypted=1
+ceph.encrypted=0                                    # indicates the device is not crypted
 ceph.osd_fsid=asdfasdf-asdfasdf-asdf-asdf-asdf      # get from crypted device tags
 ceph.osd_id=$correctosdid
 ceph.type=block
