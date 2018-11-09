@@ -21,7 +21,7 @@ Components
 ----------
 
 Component | Description
-----------+------------
+----------|------------
 Client | Something that connects to the Ceph cluster to access data.
 [Cluster](https://wiki.gentoo.org/wiki/Ceph/Cluster) | All Ceph components as a whole, providing storage
 [Object Store Device (OSD)](https://wiki.gentoo.org/wiki/Ceph/Object_Store_Device) | Actually stores data on disks
