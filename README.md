@@ -341,11 +341,14 @@ ceph tell 'mon.*' injectargs '--debug_ms 0'
 ```
 
 
-### Device location
+### OSD adding and removing
 
 ```
 # Find the host the OSD is in
 ceph osd find $osdid
+
+# See which blockdevices the OSD uses & more
+ceph osd metadata [$osdid]
 
 # To migrate data off it:
 ceph osd out $osdid
@@ -356,13 +359,22 @@ ceph osd in $osdid
 # Check if device can be removed from cluster
 ceph osd ok-to-stop $osdid
 
+# Take it down
+sudo systemctl stop ceph-osd@$osdid.service
+
 # OSD id recycling for replacement HDD:
 ceph osd destroy $osdid
-# -> then create new osd with same id
+# -> then create new osd with same id  (ceph-volume ... --osd-id)
 
 # To Remove HDD completely:
 # combines osd destroy & osd rm & osd crush rm
 ceph osd purge $osdid
+
+# Remove the volume information from lvm
+sudo ceph-volume lvm zap vgid/lvid
+
+# Disable the ceph-volume discovery for the removed osd
+sudo systemctl disable ceph-volume@lvm-$osdid-....
 ```
 
 
@@ -407,14 +419,16 @@ ceph osd crush set-device-class nvme osd.$osdid
 
 ### Device performance
 
+[Collection of benchmarked devices](https://github.com/TheJJ/ceph-diskbench)
+
 To benchmark device speed:
 
 ```
-# 4k random write with sync
-fio --filename=/dev/device --direct=1 --sync=1 --rw=write --bs=4k --numjobs=1 --iodepth=1 --runtime=60 --time_based --group_reporting --name=journal-test
+# 4k sequential write with sync
+fio --filename=/dev/device --direct=1 --sync=1 --iodepth=1 --runtime=60 --time_based --rw=write --bs=4k --numjobs=1 --group_reporting --name=ceph-journal-write-test
 ```
 
--> `[0/XXX/0 iops]`
+When `ceph-journal-write-test` results are shown, look at `iops=XXXXX`.
 
 * SSDs should have >10k iops
 * HDDs should have >10 iops
