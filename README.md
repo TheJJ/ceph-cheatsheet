@@ -260,6 +260,17 @@ Recovery speed settings:
 `osd_recovery_sleep`, `osd_recovery_max_active` und `osd_max_backfills`.
 
 
+Get current crush tunables profile:
+```
+ceph osd crush show-tunables
+```
+
+Set it to `optimal`:
+```
+ceph osd crush tunables optimal
+```
+
+
 ### Random infos
 
 * [Network config](http://docs.ceph.com/docs/master/rados/configuration/network-config-ref/)
@@ -348,6 +359,7 @@ ceph tell 'mon.*' injectargs '--debug_ms 0'
 ceph osd find $osdid
 
 # See which blockdevices the OSD uses & more
+# see links in `/dev/mapper/` and `lsblk` to correlate ids with blockdevices etc
 ceph osd metadata [$osdid]
 
 # To migrate data off it:
@@ -375,6 +387,11 @@ sudo ceph-volume lvm zap vgid/lvid
 
 # Disable the ceph-volume discovery for the removed osd
 sudo systemctl disable ceph-volume@lvm-$osdid-....
+
+# If desired, purge the LVM from the device
+sudo lvchange -a n vgid/lvid
+sudo vgremove vgid
+sudo pvremove /dev/device1
 ```
 
 
