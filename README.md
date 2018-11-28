@@ -411,6 +411,12 @@ ceph osd blacklist add $client_addr
 ```
 
 ```
+# let an OSD peer again
+# you leave the osd running during this command, it will do peering again.
+ceph osd down $osdid
+```
+
+```
 # don't recover
 ceph osd set norecover
 # don't move data once device is out
@@ -490,7 +496,7 @@ ceph tell 'osd.*' injectargs '--osd_recovery_sleep_hdd 0'
 Increase log level to 20 when an OSD crashes:
 ```
 [osd]
-debug osd = 1/20
+debug osd = 5/20
 ```
 
 When PGs are corrupted (so they prevent an OSD boot), remove the broken ones from an OSD.
