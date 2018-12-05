@@ -198,12 +198,17 @@ ceph osd pool set <poolname> crush_rule <rulename>
 
 ### CephFS
 
+On top of RADOS, Ceph provides a [POSIX filesystem](http://docs.ceph.com/docs/master/cephfs/posix/).
+
+
+#### Setup
+
 ```
 ceph fs new lolfs lol_metadata lol_root
 mount -v -t ceph -o name=lolroot,secretfile=lolfs.root.secret 10.0.18.1:6789:/ mnt/
 ```
 
-#### Add Users
+##### Add Users
 
 Create an user that has full access to `/`
 ```
@@ -215,7 +220,7 @@ To allow this client to [configure quotas and layouts](http://docs.ceph.com/docs
 ceph auth caps client.lolroot mon 'allow r' mds 'allow rwp' osd 'allow rw tag cephfs data=cephfsname'
 ```
 
-#### Subdatapool
+##### Subdatapool
 
 In the root of the cephfs, create `foldername` folder.
 Now assign the `poolname` pool to this folder.
@@ -232,7 +237,7 @@ The client needs access to this pool. Either via `allow rw tag cephfs data=lolfs
 The tagging and data is done with: `ceph osd pool application set <poolname> cephfs <key> <value>`.
 
 
-#### Namespace
+##### Namespace
 
 Objects can be prefixed with a namespace.
 Access rights can be restricted to a namespace.
@@ -240,24 +245,62 @@ Access rights can be restricted to a namespace.
 -> CephFS directory contents protected by namespace.
 
 
+#### Status
+
+```
+# show status overview
+ceph fs status
+
+# dump all filesystem info
+ceph fs dump
+
+# get info for specific fs
+ceph fs get lolfs
+```
+
+Show connected CephFS clients and their IPs
+```
+ceph tell mds.$mdsid client ls
+```
+
 
 ### Tipps
 
-* Per `osd` there should be 100 placement groups in total (see with `ceph osd df tree`).
-* `min_size` at least +1 than really required (`ceph osd pool ls detail`)
-* if health is warning, fix quickly (not just after one week)!
-* Never use `ceph osd crush reweight`, only use `ceph osd reweight`
+* If health is warning, fix quickly (not just after one week) (enable auto-repair)!
+* A single dying (SATA) disk can slow down the whole cluster because of slow ops! Replace them! Use SMART and `ceph osd perf` to find them.
+* More safety: `min_size` at least +1 than really required (`ceph osd pool ls detail`)
+* Never use `ceph osd crush reweight`, only use `ceph osd reweight`: crush rules are restored again on restart and absolute to device size, osd weight is persistent and from 0 to 1!
 * Never use `reweight-by-utilization`, instead use **balancer plugin** in `mgr`
 * When giving storage to a VM, use [`virtio-scsi`](https://wiki.gentoo.org/wiki/QEMU/Options#Hard_drive) instead of `virtio-blockdevice` and enable discard/unmapping.
 
 
 ### Performance
 
-`debug_ms` is the messenger log (which logs every damn message to ram).
-Set it to 0.
+Per `osd` there should be **100 placement groups in total** (see with `ceph osd df tree`).
 
-Recovery speed settings:
-`osd_recovery_sleep`, `osd_recovery_max_active` und `osd_max_backfills`.
+
+`debug_ms` is the messenger log (which logs every damn network message to ram by default).
+Set it to 0 in your `ceph.conf`:
+```
+[global]
+debug ms = 0/0
+```
+
+To speed up [pool reads](http://docs.ceph.com/docs/master/rados/operations/pools/#fast-read), the primary OSD queries **all** shards (not only the non-parity ones) of the data, and take the fastest reply.
+This is useful for reading small files with CephFS, but of course is a tradeoff for more network traffic between OSDs.
+```
+ceph osd pool set cephfs_data_pool fast_read 1
+```
+
+Faster recovery speed:
+```
+osd recovery sleep hdd = 0
+osd recovery max active = 5
+osd max backfills = 16
+
+# wait some time for data to maybe become available again
+osd recovery delay start = 30
+```
 
 
 Get current crush tunables profile:
@@ -268,6 +311,12 @@ ceph osd crush show-tunables
 Set it to `optimal`:
 ```
 ceph osd crush tunables optimal
+```
+
+Set the amount of memory one OSD should occupy. It will adjust its cache sizes automatically.
+```
+[osd]
+osd memory target = 4294967296   # 4GiB
 ```
 
 
@@ -376,7 +425,7 @@ sudo systemctl stop ceph-osd@$osdid.service
 
 # OSD id recycling for replacement HDD:
 ceph osd destroy $osdid
-# -> then create new osd with same id  (ceph-volume ... --osd-id)
+# -> then create new osd with new hdd and reuse the id  (ceph-volume ... --osd-id $osdid)
 
 # To Remove HDD completely:
 # combines osd destroy & osd rm & osd crush rm
