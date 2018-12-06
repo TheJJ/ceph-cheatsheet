@@ -263,6 +263,11 @@ Show connected CephFS clients and their IPs
 ceph tell mds.$mdsid client ls
 ```
 
+#### Tuning
+
+* Enable `fast_read` on pools (see below)
+* Enable inline data: Store content for (default <4KB) in inode: `ceph fs set ssnfs inline_data yes`
+
 
 ### Tipps
 
