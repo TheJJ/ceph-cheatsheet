@@ -1,7 +1,8 @@
 Ceph Cheatsheet
 ===============
 
-(c) 2018 Jonas Jelten <jj@stusta.net>
+(c) 2018-2019 Jonas Jelten <jj@stusta.net>
+
 Released under GPLv3 or any later version.
 
 If you ever need professional Ceph support, try https://croit.io!
@@ -67,10 +68,24 @@ http://docs.ceph.com/docs/mimic/rados/configuration/mon-osd-interaction/
 mon osd min in ratio = 100
 ```
 
+#### Monmap
+
+To edit the monitor map (e.g. to change names and IP addresses of monitors):
+
+```
+ceph-mon --extract-monmap --name mon.monname /tmp/monmap
+monmaptool --print /tmp/monmap
+monmaptool --help   # edit the monmap
+ceph-mon --inject-monmap --name mon.monname /tmp/monmap
+```
+
+
 ### Manager Setup
 [Manager config documentation](http://docs.ceph.com/docs/master/mgr/administrator)
 
 Run one manager for each monitor.
+Offloads work from MONs and allows scaling beyond 1000 OSDs (statistics and other unimportant stuff like disk usage)
+One MGR is active, all others are on standby.
 
 This creates a access key for cephx for the manager.
 ```
@@ -84,7 +99,7 @@ sudo -u ceph ceph-mgr -i eichhorn -d
 sudo systemctl enable --now ceph-mgr@$mgrid.service
 ```
 
-The manager provides a [shiny dashboard](http://docs.ceph.com/docs/master/mgr/dashboard).
+The manager provides a [shiny dashboard](http://docs.ceph.com/docs/master/mgr/dashboard) and other plugins (e.g. the [balancer](http://docs.ceph.com/docs/master/mgr/balancer/))
 
 
 ### Storage
@@ -100,7 +115,7 @@ Add a [BlueStore](http://docs.ceph.com/docs/master/rados/configuration/bluestore
 
 The data and journal (WAL) and keyvalue-DB can be placed on different devices (HDD and SSD).
 
-Use `--dmcrypt` to encrypt the HDD. This just uses [LUKS](https://en.wikipedia.org/wiki/LUKS)!
+Use `--dmcrypt` to encrypt the HDD. This just uses [LUKS](https://en.wikipedia.org/wiki/LUKS)! The key are stored in the MONs.
 
 ```
 sudo ceph-volume lvm create --dmcrypt --data /dev/partition
@@ -126,6 +141,12 @@ sudo lvs --readonly --separator=" " -o lv_tags,lv_path,lv_name,vg_name,lv_uuid,l
 
 Device setup (opening, decryption, ...) is done with `ceph-volume` and `ceph-volume-systemd`.
 
+The **secret hdd keys** for `--dmcrypt` are stored in the `config-key` database in the mons.
+
+```
+ceph config-key dump | grep dm-crypt
+```
+
 
 ### Metadata Setup
 
@@ -137,13 +158,37 @@ sudo -u ceph ceph-authtool --create-keyring /var/lib/ceph/mds/ceph-$mdsid/keyrin
 sudo -u ceph auth add mds.$mdsid osd "allow rwx" mds "allow" mon "allow profile mds" -i /var/lib/ceph/mds/ceph-$mdsid/keyring
 ```
 
+### Balancer
+
+- `set debug_mgr=4/5`                # for: `tail -f ceph-mgr.*.log | grep balancer`
+- `ceph balancer mode upmap`
+- `ceph balancer eval`               # evaluate current score
+- `ceph balancer optimize myplan`    # create a plan, don't run it yet
+- `ceph balancer eval myplan`        # evaluate score after myplan. optimal is 0
+- `ceph balancer show myplan`        # display what plan would do
+- `ceph balancer execute myplan`     # run plan, this misplaces the objects
+- `ceph balancer rm myplan`          # remove the plan
+
+`upmap` mode
+```
+# to use upmap as balancer mode, the client must be luminous!
+# kernel >=4.13 supports this (even though the command complains about a too old client)
+ceph osd set-require-min-compat-client luminous --yes-i-really-mean-it
+```
+
 
 ### Erasure Coding
 
 [RAID6](http://docs.ceph.com/docs/master/rados/operations/erasure-code/) with Ceph.
 
+Create a new profile, `standard_8_2` is the arbitrary name.
 ```
-sudo ceph osd erasure-code-profile set standard_8_2 k=8 m=2 crush-failure-domain=osd
+ceph osd erasure-code-profile set standard_8_2 k=8 m=2 crush-failure-domain=osd
+```
+
+```
+# show the how pools are configured, expecially which ec-profile was assigned to a pool
+ceph osd pool ls detail --format json | jq -C .
 ```
 
 `crush-failure-domain` ensures that no two chunks of an object are stored on the same `osd`.
@@ -196,6 +241,32 @@ Assign pools to placement rules.
 ceph osd pool set <poolname> crush_rule <rulename>
 ```
 
+CRUSH rule commands:
+
+```
+rule rulename {
+    # unique id
+    id 1
+    type replicated
+    # which pools can use this rule?
+    min_size 1    # -> all pools
+    max_size 10
+
+    # now the device selection steps
+    # start at the default bucket, but only for ssd devices
+    step take default class ssd
+
+    # chooseleaf firstn: recursively explore bucket to look for single devices
+    # choose firstn: select bucket for next step
+    # 0: choose as many buckets as needed for copies (-1: one less than needed, 3: exactly three)
+    # host: bucket type to choose for the next step
+    step chooseleaf firstn 0 type host
+
+    # the set of osds was selected
+    step emit
+}
+```
+
 ### CephFS
 
 On top of RADOS, Ceph provides a [POSIX filesystem](http://docs.ceph.com/docs/master/cephfs/posix/).
@@ -222,12 +293,18 @@ ceph auth caps client.lolroot mon 'allow r' mds 'allow rwp' osd 'allow rw tag ce
 
 ##### Subdatapool
 
-In the root of the cephfs, create `foldername` folder.
-Now assign the `poolname` pool to this folder.
+New data can be written to a different pool (e.g. an ec-pool).
+
+Any folder can be assigned a new custom pool.
+New file content is then written to the new pool (new == file has had size 0 before).
+Existing file content will stay in their old pool.
+Only when the content is written again from 0 (e.g. copy), the new pool is used.
 
 ```
 ceph fs add_data_pool fsname poolname
 ```
+
+To assign this pool to a folder:
 
 ```
 setfattr -n ceph.dir.layout.pool -v poolname foldername
@@ -239,10 +316,19 @@ The tagging and data is done with: `ceph osd pool application set <poolname> cep
 
 ##### Namespace
 
-Objects can be prefixed with a namespace.
-Access rights can be restricted to a namespace.
+OSD access would allow reading (and writing!) CephFS objects directly in the pool, even though the MDS prevents mounts through the path restriction.
 
--> CephFS directory contents protected by namespace.
+To actually restrict access, objects can be prefixed with a namespace so the OSDs can check access through namespace restriction.
+
+Set the namespace on a directory of the CephFS
+```
+sudo setfattr -n ceph.dir.layout.pool_namespace lol-name -v /mnt/cephfs/directory/name
+```
+
+Change auth caps for a client to only mount `/directory/name` (mds restriction) and read osd data from namespace `lol-name` on cephfs `lolfs`.
+```
+ceph auth caps client.somename mds 'allow rw path=/directory/name' mon 'allow r' osd 'allow rw namespace=lol-name tag cephfs data=lolfs'
+```
 
 
 #### Status
@@ -267,6 +353,30 @@ ceph tell mds.$mdsid client ls
 
 * Enable `fast_read` on pools (see below)
 * Enable inline data: Store content for (default <4KB) in inode: `ceph fs set ssnfs inline_data yes`
+
+
+### RADOS Block Devices RBD
+
+* Create pools: One non-EC pool for metadata first, optionally more data pools
+* If it is an EC-Pool, allow `ec_overwrites` on it
+* Prepare all pools for RBD usage: `rbd pool init $pool_name`
+
+Now, images can be created in that pool:
+
+* Create an image: `rbd create --pool $meta_pool_name --data-pool $storage_pool_name --size 20G $imagename`
+* Add `--namespace hrrgh` to define the namespace for the image (supported since Nautilus 14.0)
+
+To map an image on a client to `/dev/rbdxxx` (using monitor addresses from `/etc/ceph/ceph.conf`):
+
+* `sudo rbd map --name authuser -k keyring $meta_pool_name/$imagename`
+
+[More stuff](http://docs.ceph.com/docs/master/rbd/rados-rbd-cmds/):
+
+* List images: `rbd ls $meta_pool_name`
+* Show info: `rbd info $pool/$image`
+* Show pending deleted images: `rbd trash ls`, optionally append the pool name
+* Size increase: `rbd resize --size 9001T $pool/$img`
+* Size decrease: `rbd resize --size 20M $pool/$img --allow-shrink`
 
 
 ### Tipps
@@ -363,7 +473,9 @@ ceph osd df tree
 
 # pg status and performance
 ceph pg stat
+ceph pg ls
 ceph pg dump
+ceph pg $pgid query
 
 # osd performance
 ceph osd perf
