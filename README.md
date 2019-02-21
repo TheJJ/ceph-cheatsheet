@@ -212,7 +212,7 @@ ceph osd pool set lol_metadata min_size 2
 
 ```
 ceph osd erasure-code-profile set backup_7_3 k=7 m=3 crush-failure-domain=osd
-ceph osd pool create lol_backup 64 64 erasure standard_8_2
+ceph osd pool create lol_backup 64 64 erasure backup_7_3
 ceph osd pool set lol_backup allow_ec_overwrites true
 ```
 
@@ -229,7 +229,14 @@ crushtool -c /tmp/map.txt -o /tmp/map_new
 ceph osd setcrushmap -i /tmp/map_new
 ```
 
-In a rule, assign hdds only like this:
+In a rule, device classes can be used to select OSDs for a CRUSH rule.
+You can define and assign arbitrary device classes, e.g. use `huge`, `fast`...
+`ssd`, `hdd` and `nvme` detected automatically, but any class can be assigned:
+```
+ceph osd crush set-device-class $deviceclass $osdid
+```
+
+To select just OSDs of a given class in a CRUSH rule:
 ```
 step take default
 =>
