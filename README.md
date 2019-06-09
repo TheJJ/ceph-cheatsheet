@@ -90,7 +90,7 @@ One MGR is active, all others are on standby.
 This creates a access key for cephx for the manager.
 ```
 sudo -u ceph mkdir -p /var/lib/ceph/mgr/ceph-$mgrid
-sudo ceph auth get-or-create mgr.$mgrid mon 'allow profile mgr' osd 'allow *' mds 'allow *' -o /var/lib/ceph/mgr/ceph-$mgrid/keyring
+ceph auth get-or-create mgr.$mgrid mon 'allow profile mgr' osd 'allow *' mds 'allow *' -o /var/lib/ceph/mgr/ceph-$mgrid/keyring
 
 # test it:
 sudo -u ceph ceph-mgr -i eichhorn -d
@@ -154,8 +154,8 @@ Metadata servers are needed for the CephFS.
 
 ```
 sudo -u ceph mkdir -p /var/lib/ceph/mds/ceph-$mdsid
-sudo -u ceph ceph-authtool --create-keyring /var/lib/ceph/mds/ceph-$mdsid/keyring --gen-key -n mds.$mdsid
-sudo -u ceph auth add mds.$mdsid osd "allow rwx" mds "allow" mon "allow profile mds" -i /var/lib/ceph/mds/ceph-$mdsid/keyring
+sudo -u ceph ceph ceph-authtool --create-keyring /var/lib/ceph/mds/ceph-$mdsid/keyring --gen-key -n mds.$mdsid
+sudo -u ceph ceph auth add mds.$mdsid osd "allow rwx" mds "allow" mon "allow profile mds" -i /var/lib/ceph/mds/ceph-$mdsid/keyring
 ```
 
 ### Balancer
@@ -198,12 +198,17 @@ ceph osd pool ls detail --format json | jq -C .
 ### Pools
 
 ```
+## For CephFS:
+
+# erasure coding pool
 ceph osd pool create lol_data 32 32 erasure standard_8_2
 ceph osd pool set lol_data allow_ec_overwrites true
 
-ceph osd pool create lol_root 32
-ceph osd pool create lol_metadata 32
+# replicated pools
+ceph osd pool create lol_root 32 replicated
+ceph osd pool create lol_metadata 32 replicated
 
+# min_size: minimal osd count (per PG) before a PG goes offline
 ceph osd pool set lol_root size 3
 ceph osd pool set lol_root min_size 2
 ceph osd pool set lol_metadata size 3
@@ -211,6 +216,8 @@ ceph osd pool set lol_metadata min_size 2
 ```
 
 ```
+# in the same CephFS, there can be multiple storage policies
+# for example, this 7+3 pool can be to store some directories 'more safe'
 ceph osd erasure-code-profile set backup_7_3 k=7 m=3 crush-failure-domain=osd
 ceph osd pool create lol_backup 64 64 erasure backup_7_3
 ceph osd pool set lol_backup allow_ec_overwrites true
@@ -218,15 +225,20 @@ ceph osd pool set lol_backup allow_ec_overwrites true
 
 ### Crushmap
 
-http://docs.ceph.com/docs/master/rados/operations/crush-map-edits/
+* http://docs.ceph.com/docs/master/rados/operations/crush-map/
+* http://docs.ceph.com/docs/master/rados/operations/crush-map-edits/
 
 ```
+# get and decompile
 ceph osd getcrushmap > /tmp/map
 crushtool -d /tmp/map -o /tmp/map.txt
-# edit
-crushtool -c /tmp/map.txt -o /tmp/map_new
 
-ceph osd setcrushmap -i /tmp/map_new
+# remember the returned crushmap version
+# edit /tmp/map.txt
+
+# compile and update crushmap
+crushtool -c /tmp/map.txt -o /tmp/map_new
+ceph osd setcrushmap -i /tmp/map_new previous_crushmap_version
 ```
 
 In a rule, device classes can be used to select OSDs for a CRUSH rule.
@@ -367,18 +379,53 @@ ceph tell mds.$mdsid client ls
 * Create pools: One non-EC pool for metadata first, optionally more data pools
 * If it is an EC-Pool, allow `ec_overwrites` on it
 * Prepare all pools for RBD usage: `rbd pool init $pool_name`
+* If you have a pool named `rbd`, it's the default (metadata) rbd pool
+* You can store rbd data and metadata on separate pools, see the `--data-pool` option below
 
 Now, images can be created in that pool:
 
-* Create an image: `rbd create --pool $meta_pool_name --data-pool $storage_pool_name --size 20G $imagename`
-* Add `--namespace hrrgh` to define the namespace for the image (supported since Nautilus 14.0)
+* Optionally, create a rbd namespace to restrict access to that image (supported since Nautilus 14.0):
+  * `rbd --pool $poolname --namespace $namespacename namespace create`
+
+* Create an image: `rbd create --pool $metadata_pool_name --data-pool $storage_pool_name --namespace $namespacename --size 20G $imagename`
+
+* Display namespaces: `rbd --pool $metadata_pool_name namespace ls`
+* Display images in a namespace: `rbd --pool $metadata_pool_name --namespace $namespacename ls`
+
+* Create access key for whole pools: `ceph auth get-or-create client.$name mon 'profile rbd' osd 'profile rbd pool=$metadata_pool_name, profile rbd pool=$storage_pool_name, profile rbd-read-only pool=$someotherpoolname'`
+* Create access key for a specific rbd namespace: `ceph auth get-or-create client.$name mon 'profile rbd' osd 'profile rbd pool=$metadata_pool_name namespace=$namespacename, profile rbd pool=$storage_pool_name namespace=$namespacename'`
+  * Important: restrict the namespace on both the storage and metadata pool! Otherwise this key can read other images' data.
 
 To map an image on a client to `/dev/rbdxxx` (using monitor addresses from `/etc/ceph/ceph.conf`):
 
-* `sudo rbd map --name authuser -k keyring $meta_pool_name/$imagename`
+* `sudo rbd map --name client.$name -k keyring [$metadata_pool_name/[$namespacename/]]$imagename[@$snapshotname]`
+  * `-t nbd` to mount as nbd-device
+  * `--namespace $namespacename` to specify the rbd namespace (as an alternative to the image "path" above)
 
-[More stuff](http://docs.ceph.com/docs/master/rbd/rados-rbd-cmds/):
+#### Kernel client
 
+The Linux kernel `rbd` client doesn't support all features of `rbd` images yet.
+
+Available `rbd` features declared [here](https://github.com/ceph/ceph/blob/master/src/include/rbd/features.h) and listed [here](http://docs.ceph.com/docs/master/man/8/rbd/#cmdoption-rbd-image-feature) and defined [in the kernel code](https://github.com/torvalds/linux/blob/master/drivers/block/rbd.c).
+
+Concretely:
+* On [Linux 5.1](https://github.com/torvalds/linux/blob/v5.1/drivers/block/rbd.c#L113) or lower, you have to disable the `object-map` feature
+* On [Linux 5.0](https://github.com/torvalds/linux/blob/v5.0/drivers/block/rbd.c#L113) or lower, you have to disable `object-map` and `deep-flatten`.
+
+```
+# if you get this dmesg-output:
+rbd: image $imagename: image uses unsupported features: 0x38
+# view enabled features of this image:
+rbd --pool $meta_data_pool --namespace $namespacename info $imagename
+# then disable the unsupported features:
+rbd --pool $meta_data_pool --namespace $namespacename feature disable $imagename $unavailable_feature_name $anotherfeature...
+```
+
+
+
+#### [More stuff](http://docs.ceph.com/docs/master/rbd/rados-rbd-cmds/)
+
+* When you have a fresh rbd device, use `mkfs.ext4 -E nodiscard` to skip the discard step
 * List images: `rbd ls $meta_pool_name`
 * Show info: `rbd info $pool/$image`
 * Show pending deleted images: `rbd trash ls`, optionally append the pool name
