@@ -196,13 +196,16 @@ CEPH_ARGS="--bluestore-block-db-size 2147483648" ceph-bluestore-tool --path /var
 
 ### Metadata Setup
 
-Metadata servers are needed for the CephFS.
+Metadata servers (MDS) are needed for the CephFS.
 
 ```
 sudo -u ceph mkdir -p /var/lib/ceph/mds/ceph-$mdsid
 sudo -u ceph ceph ceph-authtool --create-keyring /var/lib/ceph/mds/ceph-$mdsid/keyring --gen-key -n mds.$mdsid
 sudo -u ceph ceph auth add mds.$mdsid osd "allow rwx" mds "allow" mon "allow profile mds" -i /var/lib/ceph/mds/ceph-$mdsid/keyring
 ```
+
+Multiple MDS servers can be active, they distribute the inode workload. Kernel clients support this since Linux 4.14.
+
 
 ### Balancer
 
@@ -424,6 +427,18 @@ ceph auth caps client.somename mds 'allow rw path=/directory/name' mon 'allow r'
 ```
 
 CephFS namespaces are supported on kernel clients since [Linux 4.8](https://github.com/torvalds/linux/commit/72b5ac54d620b29cae23d25f0405f2765b466f72).
+
+##### Quota
+
+To set a [quota](https://docs.ceph.com/docs/master/cephfs/quota/) on a CephFS subdirectory, use:
+```
+setfattr -n ceph.quota.max_bytes -v 20971520 /a/directory   # 20 MiB
+setfattr -n ceph.quota.max_files -v 5000 /another/dir       # 5000 files
+```
+
+To remove the quota, set the value to `0`.
+
+CephFS quotas work since Linux 4.17.
 
 
 #### Status
