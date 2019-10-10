@@ -117,6 +117,8 @@ The data and journal (WAL) and keyvalue-DB can be placed on different devices (H
 
 Use `--dmcrypt` to encrypt the HDD. This just uses [LUKS](https://en.wikipedia.org/wiki/LUKS)! The key are stored in the MONs.
 
+Use `--crush-device-class somename` to assign a device class (any name is possible), autodetected are `hdd`, `ssd` and `nvme`.
+
 ```
 sudo ceph-volume lvm create --dmcrypt --data /dev/partition
 ```
@@ -146,6 +148,50 @@ The **secret hdd keys** for `--dmcrypt` are stored in the `config-key` database 
 ```
 ceph config-key dump | grep dm-crypt
 ```
+
+##### Adding many OSDs at once
+
+* Ensure the cluster is healthy (`HEALTH_OK`)
+* `ceph osd set norebalance nobackfill`
+* Add the OSDs with normal procedure as above
+* Let all OSDs peer, this might take a few minutes
+* `ceph osd unset norebalance nobackfill`
+* Everything's done once cluster is on `HEALTH_OK` again
+
+
+#### Separate OSD Database and Bulk Storage
+
+You can store the metadata and data of an OSD on different devices.
+
+Usually, you store the database and journal on a `fastdevice`:
+* `ceph-volume lvm create --data /dev/slowdevice --block.db /dev/fastdevice`
+
+If your `fastdevice` is too small, you can store only the journal on it:
+* `ceph-volume lvm create --data /dev/slowdevice --block.wal /dev/fastdevice`
+
+You can even store on three different blockdevices: `data`, `block.db` and `block.wal`.
+
+Because a fast device (SSD, NVMe is usually so much faster than a HDD),
+you can use multiple partitions and place one DB on each.
+
+If the "external" DB is full, the data-device will be used to store the remaining information.
+BlueStore will automatically relocate often-used data to the fast device then.
+
+
+##### Migrate of OSD journal and database
+
+With [`ceph-bluestore-tool`](https://docs.ceph.com/docs/master/man/8/ceph-bluestore-tool/), you can create, migrate expand and merge OSD block devices.
+
+* To move the block.db from an all-in-one OSD to a separate device, you need to overwrite the
+  default size of `1G` if your new `block.db` should be bigger than that (example with a new `2G` DB):
+
+```
+CEPH_ARGS="--bluestore-block-db-size 2147483648" ceph-bluestore-tool --path /var/lib/ceph/osd/ceph-42 bluefs-bdev-new-db --dev-target /dev/newfastdevice
+```
+
+* To resize a `block.db`, use `bluefs-bdev-expand` (e.g. when the underlying partition size was increased)
+* To merge separate `block.db` or `block.wal` drives onto the slow disk, use `bdev-migrate`
+* Details for the commands are in the [manpage](https://docs.ceph.com/docs/master/man/8/ceph-bluestore-tool/)
 
 
 ### Metadata Setup
@@ -223,6 +269,29 @@ ceph osd pool create lol_backup 64 64 erasure backup_7_3
 ceph osd pool set lol_backup allow_ec_overwrites true
 ```
 
+#### Placement group autoscaling
+
+`nautilus` support automatic creation and pruing of placement groups.
+
+```
+ceph mgr module enable pg_autoscaler
+
+# view autoscale information and what the autoscaler would do
+ceph osd pool autoscale-status
+```
+
+```
+# help the autoscaler by providing target_ratio:
+# the fraction of total cluster size this pool is expected to consume.
+ceph osd pool set foo target_size_ratio .2
+
+# only warn that the pg-count is suboptimal
+ceph osd pool set $poolname pg_autoscale_mode warn
+
+# enable automatic pg adjustments on the given pool
+ceph osd pool set $poolname pg_autoscale_mode on
+```
+
 ### Crushmap
 
 * http://docs.ceph.com/docs/master/rados/operations/crush-map/
@@ -239,6 +308,11 @@ crushtool -d /tmp/map -o /tmp/map.txt
 # compile and update crushmap
 crushtool -c /tmp/map.txt -o /tmp/map_new
 ceph osd setcrushmap -i /tmp/map_new previous_crushmap_version
+```
+
+compare crushmaps:
+```
+crushtool -i crushmap --compare crushmap.new
 ```
 
 In a rule, device classes can be used to select OSDs for a CRUSH rule.
@@ -341,13 +415,15 @@ To actually restrict access, objects can be prefixed with a namespace so the OSD
 
 Set the namespace on a directory of the CephFS
 ```
-sudo setfattr -n ceph.dir.layout.pool_namespace lol-name -v /mnt/cephfs/directory/name
+sudo setfattr -n ceph.dir.layout.pool_namespace -v $namespacename /mnt/cephfs/directory/name
 ```
 
-Change auth caps for a client to only mount `/directory/name` (mds restriction) and read osd data from namespace `lol-name` on cephfs `lolfs`.
+Change auth caps for a client to only mount `/directory/name` (mds restriction) and read osd data from namespace `$namespacename` on cephfs `lolfs`.
 ```
-ceph auth caps client.somename mds 'allow rw path=/directory/name' mon 'allow r' osd 'allow rw namespace=lol-name tag cephfs data=lolfs'
+ceph auth caps client.somename mds 'allow rw path=/directory/name' mon 'allow r' osd 'allow rw namespace=$namespacename tag cephfs data=lolfs'
 ```
+
+CephFS namespaces are supported on kernel clients since [Linux 4.8](https://github.com/torvalds/linux/commit/72b5ac54d620b29cae23d25f0405f2765b466f72).
 
 
 #### Status
@@ -377,17 +453,19 @@ ceph tell mds.$mdsid client ls
 ### RADOS Block Devices RBD
 
 * Create pools: One non-EC pool for metadata first, optionally more data pools
-* If it is an EC-Pool, allow `ec_overwrites` on it
+* If a data pool is an EC-Pool, allow `ec_overwrites` on it
+  * `ceph osd pool set lol_pool allow_ec_overwrites true`
+  * Linux 4.11 is required if the Kernel should map the RBD
 * Prepare all pools for RBD usage: `rbd pool init $pool_name`
 * If you have a pool named `rbd`, it's the default (metadata) rbd pool
 * You can store rbd data and metadata on separate pools, see the `--data-pool` option below
 
 Now, images can be created in that pool:
 
-* Optionally, create a rbd namespace to restrict access to that image (supported since Nautilus 14.0):
+* Optionally, create a rbd namespace to restrict access to that image (supported since Nautilus 14.0 and Kernel 4.19):
   * `rbd --pool $poolname --namespace $namespacename namespace create`
 
-* Create an image: `rbd create --pool $metadata_pool_name --data-pool $storage_pool_name --namespace $namespacename --size 20G $imagename`
+* **Create** an image: `rbd create --pool $metadata_pool_name --data-pool $storage_pool_name --namespace $namespacename --size 20G $imagename`
 
 * Display namespaces: `rbd --pool $metadata_pool_name namespace ls`
 * Display images in a namespace: `rbd --pool $metadata_pool_name --namespace $namespacename ls`
@@ -402,15 +480,29 @@ To map an image on a client to `/dev/rbdxxx` (using monitor addresses from `/etc
   * `-t nbd` to mount as nbd-device
   * `--namespace $namespacename` to specify the rbd namespace (as an alternative to the image "path" above)
 
+#### Benchmarking
+
+```
+rbd bench --io-type rw $poolname/$imagename
+# other io types: read, write, rw
+# --io-pattern seq rand
+# --io-size $oneiosize (with B/K/M/G/T suffix)
+# --io-total $totalbytecount (with suffix)
+# --io-threads $threadcount
+```
+
 #### Kernel client
 
-The Linux kernel `rbd` client doesn't support all features of `rbd` images yet.
+Some Linux kernel `rbd` clients ("krbd") don't support all features of `rbd` images.
 
 Available `rbd` features declared [here](https://github.com/ceph/ceph/blob/master/src/include/rbd/features.h) and listed [here](http://docs.ceph.com/docs/master/man/8/rbd/#cmdoption-rbd-image-feature) and defined [in the kernel code](https://github.com/torvalds/linux/blob/master/drivers/block/rbd.c).
 
-Concretely:
-* On [Linux 5.1](https://github.com/torvalds/linux/blob/v5.1/drivers/block/rbd.c#L113) or lower, you have to disable the `object-map` feature
-* On [Linux 5.0](https://github.com/torvalds/linux/blob/v5.0/drivers/block/rbd.c#L113) or lower, you have to disable `object-map` and `deep-flatten`.
+Supported krbd features:
+* Since [Linux 5.3](https://github.com/torvalds/linux/blob/v5.3/drivers/block/rbd.c#L113) support for `object-map` and `fast-diff`
+* Since [Linux 5.1](https://github.com/torvalds/linux/blob/v5.1/drivers/block/rbd.c#L113) support for `deep-flatten`
+* Since [Linux 4.11](https://github.com/torvalds/linux/blob/v4.11/drivers/block/rbd.c#L113) support for `data-pool`
+* Since [Linux 4.9](https://github.com/torvalds/linux/blob/v4.9/drivers/block/rbd.c#L113) support for `exclusive-lock`
+* Since [Linux 3.10](https://github.com/torvalds/linux/blob/v4.9/drivers/block/rbd.c#L113) support for `striping`
 
 ```
 # if you get this dmesg-output:
@@ -433,6 +525,22 @@ rbd --pool $meta_data_pool --namespace $namespacename feature disable $imagename
 * Size decrease: `rbd resize --size 20M $pool/$img --allow-shrink`
 
 
+#### Automatic mapping
+
+Automatic RBD mapping with [`rbdmap.service`](http://docs.ceph.com/docs/master/man/8/rbdmap), configured in `/etc/ceph/rbdmap`:
+
+```
+$poolname/$namespacename/$imagename name=client.$username,keyring=/etc/ceph/ceph.client.$username.keyring
+```
+
+In `/etc/fstab`, note the `noauto`:
+```
+/dev/rbd/$metadata_pool_name/$imagename $mountpoint $filesystem defaults,noatime,noauto 0 0
+```
+
+(it's [a bug](http://tracker.ceph.com/issues/40247) that images are missing the namespace name in their `/dev` path).
+
+
 ### Tipps
 
 * If health is warning, fix quickly (not just after one week) (enable auto-repair)!
@@ -445,7 +553,7 @@ rbd --pool $meta_data_pool --namespace $namespacename feature disable $imagename
 
 ### Performance
 
-Per `osd` there should be **100 placement groups in total** (see with `ceph osd df tree`).
+Each OSD should server **50 to 150 placement groups in total** (see with `ceph osd df tree`).
 
 
 `debug_ms` is the messenger log (which logs every damn network message to ram by default).
@@ -571,6 +679,14 @@ ceph tell 'osd.*' injectargs '--debug_ms 0'
 ceph tell 'mon.*' injectargs '--debug_ms 0'
 ```
 
+```
+# show daemon versions to find outdated ones ;)
+ceph versions
+ceph tell 'osd.*' version
+ceph tell 'mds.*' version
+ceph tell 'mon.*' version
+```
+
 
 ### OSD adding and removing
 
@@ -631,22 +747,37 @@ ceph osd blacklist add $client_addr
 ```
 
 ```
-# let an OSD peer again
+# let an OSD repeer again
 # you leave the osd running during this command, it will do peering again.
+# if you have stuck PGs it often helps to repeer its primary OSD!
 ceph osd down $osdid
 ```
 
 ```
 # don't recover
 ceph osd set norecover
+
 # don't move data once device is out
 ceph osd set noout
+
+# don't mark new OSDs as in
+ceph osd set noin
+
 # disable scrubbing
 ceph osd set noscrub
+
 # disable deepscrubbing
 ceph osd set nodeep-scrub
 
 # to unset, use unset $flag
+```
+
+maintenance for single OSDs instead of the whole cluster:
+```
+ceph osd add-noout 0
+ceph osd rm-noout 0
+
+same goes for: nodown, noup, noin
 ```
 
 ```
