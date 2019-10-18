@@ -397,6 +397,8 @@ Existing file content will stay in their old pool.
 Only when the content is written again from 0 (e.g. copy), the new pool is used.
 
 ```
+# this automatically sets the application tag for 'cephfs' to data=$cephfsname
+# so a client automatically has access!
 ceph fs add_data_pool fsname poolname
 ```
 
@@ -406,8 +408,14 @@ To assign this pool to a folder:
 setfattr -n ceph.dir.layout.pool -v poolname foldername
 ```
 
-The client needs access to this pool. Either via `allow rw tag cephfs data=lolfs` or explicit `allow rw pool=poolname`.
-The tagging and data is done with: `ceph osd pool application set <poolname> cephfs <key> <value>`.
+The client needs access to this pool.
+The "simple" way is matching to the cephfs name in the auth key:
+Clients will automatically have access to all pools through the `data=cephfsname` tag, if the access key has the `osd 'allow rw tag cephfs data=cephfsname'` capability.
+You can set the tag manually (but why would you do that?) with: `ceph osd pool application set <poolname> cephfs <key> <value>`.
+
+Alternatively, you can grant access to pools explicitly: `allow rw pool=poolname, allow r pool=someotherpool, ...`.
+
+Access is better restricted by [namespace](#namespace), though: Namespaces are pool-independent and there can be many namespaces per pool.
 
 
 ##### Namespace
@@ -426,7 +434,10 @@ Change auth caps for a client to only mount `/directory/name` (mds restriction) 
 ceph auth caps client.somename mds 'allow rw path=/directory/name' mon 'allow r' osd 'allow rw namespace=$namespacename tag cephfs data=lolfs'
 ```
 
+You can grant access to multiple namespaces to a CephFS client with `allow rw namespace=$ns1, allow r namespace=$ns2, allow rw ....`.
+
 CephFS namespaces are supported on kernel clients since [Linux 4.8](https://github.com/torvalds/linux/commit/72b5ac54d620b29cae23d25f0405f2765b466f72).
+
 
 ##### Quota
 
@@ -438,7 +449,7 @@ setfattr -n ceph.quota.max_files -v 5000 /another/dir       # 5000 files
 
 To remove the quota, set the value to `0`.
 
-CephFS quotas work since Linux 4.17.
+CephFS quotas work since [Linux 4.17](https://github.com/torvalds/linux/commit/b284d4d5a6785f8cd07eda2646a95782373cd01e).
 
 
 #### Status
@@ -462,7 +473,7 @@ ceph tell mds.$mdsid client ls
 #### Tuning
 
 * Enable `fast_read` on pools (see below)
-* Enable inline data: Store content for (default <4KB) in inode: `ceph fs set ssnfs inline_data yes`
+* Enable inline data: Store content for (default <4KB) in inode: `ceph fs set lolfs inline_data yes`
 
 
 ### RADOS Block Devices RBD
@@ -470,7 +481,7 @@ ceph tell mds.$mdsid client ls
 * Create pools: One non-EC pool for metadata first, optionally more data pools
 * If a data pool is an EC-Pool, allow `ec_overwrites` on it
   * `ceph osd pool set lol_pool allow_ec_overwrites true`
-  * Linux 4.11 is required if the Kernel should map the RBD
+  * [Linux 4.11](https://github.com/torvalds/linux/commit/b2deee2dc06db7cdf99b84346e69bdb9db9baa85) is required if the Kernel should map the RBD
 * Prepare all pools for RBD usage: `rbd pool init $pool_name`
 * If you have a pool named `rbd`, it's the default (metadata) rbd pool
 * You can store rbd data and metadata on separate pools, see the `--data-pool` option below
