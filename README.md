@@ -382,10 +382,32 @@ Create an user that has full access to `/`
 ceph fs authorize lolfs client.lolroot / rw
 ```
 
-To allow this client to [configure quotas and layouts](http://docs.ceph.com/docs/master/cephfs/client-auth/#layout-and-quota-restriction-the-p-fla):
+You can restict access to a path (this is only for Metadata, i.e. inode infos! use [namespaces](#namespace) to restrict data access).
+```
+ceph fs authorize lolfs client.some.weird_name /lol/ho_ho_ho rw /stuff r
+```
+
+These commands just create regular `auth` keys, you can view its (effective) permissions with:
+```
+ceph auth get client.some.weird_name
+```
+
+###### CephFS Quotas and Layouts
+
+To allow this client to [configure quotas and layouts](http://docs.ceph.com/docs/master/cephfs/client-auth/#layout-and-quota-restriction-the-p-flag), it needs the `p` flag. Beware that this **overwrites** existing caps, so make sure to `auth get` first, and then update.
 ```
 ceph auth caps client.lolroot mon 'allow r' mds 'allow rwp' osd 'allow rw tag cephfs data=cephfsname'
 ```
+
+###### Snapshot Permissions
+
+To allow a key to manage snapshots, it needs the `s` permission flag for MDS.
+```
+ceph auth caps client.blabla ... mds 'allow rw path=/some/dir, allow rws path=/some/dir/snapshots_allowed, ...' ...
+```
+
+This client can now access `/some/dir` and can manage snapshots in `/some/dir/snapshots_allowed` or any folder below.
+
 
 ##### Subdatapool
 
@@ -439,7 +461,7 @@ You can grant access to multiple namespaces to a CephFS client with `allow rw na
 CephFS namespaces are supported on kernel clients since [Linux 4.8](https://github.com/torvalds/linux/commit/72b5ac54d620b29cae23d25f0405f2765b466f72).
 
 
-##### Quota
+##### Quota Config
 
 To set a [quota](https://docs.ceph.com/docs/master/cephfs/quota/) on a CephFS subdirectory, use:
 ```
@@ -450,6 +472,12 @@ setfattr -n ceph.quota.max_files -v 5000 /another/dir       # 5000 files
 To remove the quota, set the value to `0`.
 
 CephFS quotas work since [Linux 4.17](https://github.com/torvalds/linux/commit/b284d4d5a6785f8cd07eda2646a95782373cd01e).
+
+
+##### CephFS Snapshots
+
+A client with the `s` permission for MDS can manage snapshots.
+A [snapshot](https://docs.ceph.com/docs/master/dev/cephfs-snapshots/) is created by creating a directory: `dir/to/backup/.snap/snapshot_name`.
 
 
 #### Status
