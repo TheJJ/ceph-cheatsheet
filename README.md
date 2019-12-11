@@ -863,6 +863,52 @@ When `ceph-journal-write-test` results are shown, look at `iops=XXXXX`.
 * Bad SSDs have <100 iops => >10ms latency
 
 
+### PG Autoscale
+
+```
+ceph osd pool autoscale-status
+```
+
+The PG autoscaler can increase or decrease the number of PGs.
+
+Modes: `on`, `warn`, `off`
+
+I strongly _recommend against_ `on`: I had a funny outage because too many PGs were created and the OSDs then rejected them (solution: increase `mon_max_pg_per_osd`)
+
+Default policy for new pools:
+```
+ceph config set global osd_pool_default_pg_autoscale_mode $mode
+```
+
+Change policy for a pool
+```
+ceph osd pool set $pool pg_autoscale_mode $mode
+```
+
+### PGs not starting
+
+It very often helps to **restart the acting primary** of a problematic PG.
+Also, if you do `ceph pg $pgid` query, you can see what peers the PG interacts with (primary, backfill-target, ...). Restarting those can also help.
+For example, I got a funny `active+remapped` when several PGs chose an OSD as backfill target. After restarting that, the PGs became active again.
+
+If the PG hangs in `down` or `unknown`, you can figure out their 'last primary' with `ceph pg map $pgid`.
+
+If the PG hangs in `activating`, the involved OSDs may have too many PGs and refuses accepting them:
+
+* Soft limit: `mon_max_pg_per_osd = 250`: You'll see a warning.
+* Hard limit: `osd_max_pg_per_osd_hard_ratio = 3`, i.e. `3x250 = 750` PGs per OSD.
+
+To lift the limit **temporarily**, tell it all OSDs and MONs:
+```
+ceph tell 'osd.*' injectargs '--mon_max_pg_per_osd=2000'
+ceph tell 'mon.*' injectargs '--mon_max_pg_per_osd=2000'
+```
+
+Then, you may need to repeer primary OSDs of stuck pgs with `ceph osd down $osdid`. Make sure to reduce the number of PGs!
+
+This config variable [basically blocks accepting PGs in OSDs](https://github.com/ceph/ceph/blob/master/src/osd/OSD.cc).
+
+
 ### Data Corruption
 
 http://docs.ceph.com/docs/master/rados/troubleshooting/troubleshooting-pg/
