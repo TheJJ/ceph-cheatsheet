@@ -736,6 +736,8 @@ ceph tell 'mon.*' injectargs '--debug_ms 0'
 ```
 # show daemon versions to find outdated ones ;)
 ceph versions
+
+# show daemon version for concrete hosts
 ceph tell 'osd.*' version
 ceph tell 'mds.*' version
 ceph tell 'mon.*' version
@@ -808,30 +810,29 @@ ceph osd down $osdid
 ```
 
 ```
-# don't recover
-ceph osd set norecover
+# osd control flags:
+# don't recover data: norecover
+# don't mark device out if it is down: noout
+# don't mark new OSDs as in: noin
+# disable scrubbing: noscrub
+# disable deepscrubbing: nodeep-scrub
 
-# don't move data once device is out
-ceph osd set noout
+# global flag set:
+ceph osd set $flag
 
-# don't mark new OSDs as in
-ceph osd set noin
+# per-daemon flag unset:
+ceph osd set-group $flag $daemonname $daemonname...
 
-# disable scrubbing
-ceph osd set noscrub
+# global flag unset:
+ceph osd unset $flag
 
-# disable deepscrubbing
-ceph osd set nodeep-scrub
+# per-daemon flag unset:
+ceph osd unset-group $flag $daemonname $daemonname...
 
-# to unset, use unset $flag
-```
-
-maintenance for single OSDs instead of the whole cluster:
-```
-ceph osd add-noout 0
-ceph osd rm-noout 0
-
-same goes for: nodown, noup, noin
+# alternative per-daemon commands:
+# works for noout, nodown, noup, noin
+ceph osd add-$flag 0 1 2 ...
+ceph osd rm-$flag 0 1 2 ...
 ```
 
 ```
@@ -840,7 +841,7 @@ ceph osd reweight $osdid $weight
 ```
 
 ```
-# set device class to hdd, ssd or nvme
+# set device class to some identifier (builtin are hdd, ssd or nvme)
 ceph osd crush set-device-class nvme osd.$osdid
 ```
 
@@ -909,6 +910,32 @@ Then, you may need to repeer primary OSDs of stuck pgs with `ceph osd down $osdi
 This config variable [basically blocks accepting PGs in OSDs](https://github.com/ceph/ceph/blob/master/src/osd/OSD.cc).
 
 
+### MDS
+
+Online scrub:
+
+```
+# flush journal
+ceph daemon mds.$id flush journal
+
+# online scrub
+ceph daemon mds.$id scrub_path /path/on/fs recursive
+
+# tell ceph that mds $0 has been repaired
+ceph mds repaired $cephfs_name:0
+```
+
+### Recovery
+
+```
+# speed improvements
+# set number of pg-backfills for one osd
+ceph tell 'osd.*' injectargs -- --osd_max_backfills=4
+
+# no forced sleeptime for recovery
+ceph tell 'osd.*' injectargs -- --osd_recovery_sleep_hdd=0
+```
+
 ### Data Corruption
 
 http://docs.ceph.com/docs/master/rados/troubleshooting/troubleshooting-pg/
@@ -930,17 +957,6 @@ To enable automatic repair of placement groups, set config option:
 osd scrub auto repair = true
 ```
 
-### Recovery
-
-```
-# speed improvements
-# more backfills for one osd (increase even more, if neccessary)
-ceph tell 'osd.*' injectargs '--osd_max_backfills 16'
-
-# no forced sleeptime for recovery
-ceph tell 'osd.*' injectargs '--osd_recovery_sleep_hdd 0'
-```
-
 
 #### OSD crashes
 
@@ -955,18 +971,25 @@ There's [a script](https://gist.github.com/TheJJ/c6be62e612ac4782bd0aa279d8c8219
 
 
 ```
+# turn off the OSD so we can work on its store directly!
+
 # export a pg from an OSD
 # to delete it from OSD: --op export-remove ...
 ceph-objectstore-tool --op export --data-path /var/lib/ceph/osd/ceph-$id --pgid $pgid --file $pgid-bup-osd$id
 
 # import into an OSD:
 ceph-objectstore-tool --op import --data-path /var/lib/ceph/osd/ceph-$id --file saved-pg-dump
+
+# other useful ops: trim-pg-log
+
+# compact bluestore:
+ceph-kvstore-tool <rocksdb|bluestore-kv> /var/lib/ceph/osd/ceph-$id compact
 ```
 
 
 #### Incomplete PGs
 
-[`incomplete`](http://docs.ceph.com/docs/master/rados/operations/pg-states/) PG state means Ceph is afraid of starting.
+[`incomplete`](http://docs.ceph.com/docs/master/rados/operations/pg-states/) PG state means Ceph is afraid of starting the PG.
 
 If the `ceph pg $pgid query` for a `incomplete` pg says `les_bound` blocked, the following might help.
 
@@ -986,34 +1009,13 @@ To proceed, remove other variants from OSDs so the largest pg variant is remaini
 Then, to tell Ceph to just use what's there:
 
 ```
-# JUST FOR RECOVERY set for the right OSD (or all)
+# JUST FOR RECOVERY set for the right OSD (or inject the arg)
 [osd.1337]
 osd find best info ignore history les = true
 ```
 
-To speed up the recovery/backfill:
-```
-[osd]
-osd recovery sleep hdd = 0
-```
-
 When recovery is done, remove the flag!
 
-
-### MDS
-
-Online scrub:
-
-```
-# flush journal
-ceph daemon mds.$id flush journal
-
-# online scrub
-ceph daemon mds.$id scrub_path /path/on/fs recursive
-
-# tell ceph that mds $0 has been repaired
-ceph mds repaired cephfs_name:0
-```
 
 ### Decrypt OSDs
 
