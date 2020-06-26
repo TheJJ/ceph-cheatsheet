@@ -200,23 +200,34 @@ Metadata servers (MDS) are needed for the CephFS.
 
 ```
 sudo -u ceph mkdir -p /var/lib/ceph/mds/ceph-$mdsid
-sudo -u ceph ceph ceph-authtool --create-keyring /var/lib/ceph/mds/ceph-$mdsid/keyring --gen-key -n mds.$mdsid
+sudo -u ceph ceph-authtool --create-keyring /var/lib/ceph/mds/ceph-$mdsid/keyring --gen-key -n mds.$mdsid
 sudo -u ceph ceph auth add mds.$mdsid osd "allow rwx" mds "allow" mon "allow profile mds" -i /var/lib/ceph/mds/ceph-$mdsid/keyring
+# test with sudo ceph-mds -f --cluster ceph --id $mdsid --setuser ceph --setgroup ceph
+sudo systemctl enable --now ceph-mds@$mdsid.service
 ```
 
 Multiple MDS servers can be active, they distribute the inode workload. Kernel clients support this since Linux 4.14.
 
+To assign a hot-standby to every active MDS:
+
+```
+ceph fs set $fsname allow_standby_replay <true|false>
+```
+
 
 ### Balancer
 
-- `set debug_mgr=4/5`                # for: `tail -f ceph-mgr.*.log | grep balancer`
-- `ceph balancer mode upmap`
-- `ceph balancer eval`               # evaluate current score
-- `ceph balancer optimize myplan`    # create a plan, don't run it yet
-- `ceph balancer eval myplan`        # evaluate score after myplan. optimal is 0
-- `ceph balancer show myplan`        # display what plan would do
-- `ceph balancer execute myplan`     # run plan, this misplaces the objects
-- `ceph balancer rm myplan`          # remove the plan
+```
+ceph tell 'mds.*' injectargs -- --debug_mgr=4/5    # for: `tail -f ceph-mgr.*.log | grep balancer`
+ceph balancer status
+ceph balancer mode upmap         # upmap items as movement method, not reweighting.
+ceph balancer eval               # evaluate current score
+ceph balancer optimize myplan    # create a plan, don't run it yet
+ceph balancer eval myplan        # evaluate score after myplan. optimal is 0
+ceph balancer show myplan        # display what plan would do
+ceph balancer execute myplan     # run plan, this misplaces the objects
+ceph balancer rm myplan
+```
 
 `upmap` mode
 ```
@@ -281,6 +292,12 @@ ceph mgr module enable pg_autoscaler
 
 # view autoscale information and what the autoscaler would do
 ceph osd pool autoscale-status
+
+# policy for newly created pools
+ceph config set global osd_pool_default_pg_autoscale_mode <mode>
+
+# policy per-pool
+ceph osd pool set $pool pg_autoscale_mode <mode>
 ```
 
 ```
@@ -669,6 +686,8 @@ Status:
 ceph -s         # current status
 ceph -w         # status change log, maybe even to ceph -w | tee -a /var/log/cephhealth.log
 iostat -Pxm 5   # io status, see last column: %util
+iotop           # io status
+htop            # osd i/o stats per thread
 ```
 
 http://docs.ceph.com/docs/master/rados/operations/monitoring-osd-pg/
@@ -721,7 +740,6 @@ ceph daemon mds.$id session ls
 ceph daemon mds.$id cache status
 ```
 
-Inject configuration options (see options from Dashboard under "Cluster" -> "Configuration Doc.") at runtime.
 
 ```
 ceph daemon $daemontype.$id config
@@ -729,13 +747,16 @@ ceph daemon $daemontype.$id config
 
 ```
 # inject any ceph.config option into running daemons
-ceph tell 'osd.*' injectargs '--debug_ms 0'
-ceph tell 'mon.*' injectargs '--debug_ms 0'
+# can also be done with dashboard under "Cluster" -> "Configuration Doc."
+ceph tell 'osd.*' injectargs -- --debug_ms=0
 ```
 
 ```
 # show daemon versions to find outdated ones ;)
 ceph versions
+
+# show cluster topology, find nodes
+ceph node ls {all|osd|mon|mds|mgr}
 
 # show daemon version for concrete hosts
 ceph tell 'osd.*' version
@@ -894,10 +915,14 @@ For example, I got a funny `active+remapped` when several PGs chose an OSD as ba
 
 If the PG hangs in `down` or `unknown`, you can figure out their 'last primary' with `ceph pg map $pgid`.
 
-If the PG hangs in `activating`, the involved OSDs may have too many PGs and refuses accepting them:
+If a PG is stuck `activating`, the involved OSDs may have too many PGs and refuses accepting them:
 
 * Soft limit: `mon_max_pg_per_osd = 250`: You'll see a warning.
 * Hard limit: `osd_max_pg_per_osd_hard_ratio = 3`, i.e. `3x250 = 750` PGs per OSD.
+
+At least in versions `<= 14.2.8`, the ONLY the soft-limit will display a warning! When there's PGs **over the hard limit**, NO WARNING is issued (to be fixed).
+
+Newly added OSDs may be the problem. This may be the case when a PG is stuck `activating+remapped`, and in `ceph pg $pgid query` the backfill target is a new OSD. Have a look at `ceph daemon osd.$id status` and observe if its `"num_pgs"` is at the limit. If this is indeed the problem, increase the PG limit and repeer the new OSD.
 
 To lift the limit **temporarily**, tell it all OSDs and MONs:
 ```
@@ -955,6 +980,22 @@ To enable automatic repair of placement groups, set config option:
 ```
 # automatically try to fix scrub errors on corrupted pgs
 osd scrub auto repair = true
+```
+
+Control the scrub intervals:
+```
+[global]  # so the mons can check the intervals!
+# every week if load is low enough
+osd scrub min interval = 604800
+# every two weeks even if the load is too high
+osd scrub max interval = 2678400
+# deep scrub once every month (60*60*24*31*1)
+osd deep scrub interval = 2678400
+# time to sleep for group of chunks
+# to reduce client latency impact
+osd scrub sleep = 0.05
+# no scrub while there is recovery (performance)
+osd scrub during recovery = false
 ```
 
 
