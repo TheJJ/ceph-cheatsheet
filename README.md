@@ -217,6 +217,22 @@ ceph fs set $fsname allow_standby_replay <true|false>
 
 ### Balancer
 
+This is super-important to use when you have different-sized OSDs!
+
+Also, make sure for right balancing that big pools have enough PGs, otherwise each shard of the PG is very big already.
+If there's too less PGs for a larger pool, the PGs are balanced correctly, but **one** might already fill up a OSD by 200G.
+
+```
+# shard size calculation
+if pool is replica:
+    shardsize = pool_size / pg_num
+elif pool is erasurecoded(n+m):
+    shardsize = pool_size / (pg_num * n)
+```
+
+For ideal balancing, the shard sizes of all pools should be equal!
+
+
 ```
 ceph tell 'mds.*' injectargs -- --debug_mgr=4/5    # for: `tail -f ceph-mgr.*.log | grep balancer`
 ceph balancer status
@@ -227,15 +243,22 @@ ceph balancer eval myplan        # evaluate score after myplan. optimal is 0
 ceph balancer show myplan        # display what plan would do
 ceph balancer execute myplan     # run plan, this misplaces the objects
 ceph balancer rm myplan
+
+# view auto-balancer status and durations
+ceph tell 'mgr.$activemgrid' balancer status
 ```
 
-`upmap` mode
+use `upmap` mode: relocate single PGs as "override" to CRUSH.
 ```
 # to use upmap as balancer mode, the client must be luminous!
 # kernel >=4.13 supports this (even though the command complains about a too old client)
 ceph osd set-require-min-compat-client luminous --yes-i-really-mean-it
 ```
 
+To further optimize placement and really adjust the equal PG-count to be within a bound of 1.
+```
+ceph config set mgr mgr/balancer/upmap_max_deviation 1
+```
 
 ### Erasure Coding
 
