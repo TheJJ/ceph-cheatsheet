@@ -635,6 +635,22 @@ In `/etc/fstab`, note the `noauto`:
 (it's [a bug](http://tracker.ceph.com/issues/40247) that images are missing the namespace name in their `/dev` path).
 
 
+#### Manual mapping
+
+Instead of `rbdmap.service` we can directly use sysfs to map:
+
+```
+echo $ceph_monitor_ip name=$username,secret=$secret $pool $image > /sys/bus/rbd/add
+```
+
+
+#### Status
+
+Show connected RBD clients and their IPs
+```
+rbd status $pool/$namespace/$image
+```
+
 ### Tipps
 
 * If health is warning, fix quickly (not just after one week) (enable auto-repair)!
@@ -647,7 +663,7 @@ In `/etc/fstab`, note the `noauto`:
 
 ### Performance
 
-Each OSD should server **50 to 150 placement groups in total** (see with `ceph osd df tree`).
+Each OSD should serve **50 to 150 placement groups in total** (see with `ceph osd df tree`).
 
 
 `debug_ms` is the messenger log (which logs every damn network message to ram by default).
@@ -763,15 +779,15 @@ ceph daemon mds.$id session ls
 ceph daemon mds.$id cache status
 ```
 
-
 ```
-ceph daemon $daemontype.$id config
+ceph daemon $daemontype.$id config diff|get|set|show
 ```
 
 ```
 # inject any ceph.config option into running daemons
 # can also be done with dashboard under "Cluster" -> "Configuration Doc."
-ceph tell 'osd.*' injectargs -- --debug_ms=0
+ceph tell 'osd.*' injectargs -- --debug_ms=0 --osd_deep_scrub_interval=5356800
+ceph tell 'mon.*' injectargs -- --debug_ms=0
 ```
 
 ```
@@ -932,7 +948,7 @@ ceph osd pool set $pool pg_autoscale_mode $mode
 
 ### PGs not starting
 
-It very often helps to **restart the acting primary** of a problematic PG.
+It very often helps to **restart or repeer the acting primary** of a problematic PG.
 Also, if you do `ceph pg $pgid` query, you can see what peers the PG interacts with (primary, backfill-target, ...). Restarting those can also help.
 For example, I got a funny `active+remapped` when several PGs chose an OSD as backfill target. After restarting that, the PGs became active again.
 
@@ -945,17 +961,21 @@ If a PG is stuck `activating`, the involved OSDs may have too many PGs and refus
 
 At least in versions `<= 14.2.8`, the ONLY the soft-limit will display a warning! When there's PGs **over the hard limit**, NO WARNING is issued (to be fixed).
 
+#### Stuck after adding new OSDs
+
 Newly added OSDs may be the problem. This may be the case when a PG is stuck `activating+remapped`, and in `ceph pg $pgid query` the backfill target is a new OSD. Have a look at `ceph daemon osd.$id status` and observe if its `"num_pgs"` is at the limit. If this is indeed the problem, increase the PG limit and repeer the new OSD.
 
 To lift the limit **temporarily**, tell it all OSDs and MONs:
 ```
-ceph tell 'osd.*' injectargs '--mon_max_pg_per_osd=2000'
-ceph tell 'mon.*' injectargs '--mon_max_pg_per_osd=2000'
+ceph tell 'osd.*' injectargs -- --mon_max_pg_per_osd=2000
+ceph tell 'mon.*' injectargs -- --mon_max_pg_per_osd=2000
 ```
-
-Then, you may need to repeer primary OSDs of stuck pgs with `ceph osd down $osdid`. Make sure to reduce the number of PGs!
-
 This config variable [basically blocks accepting PGs in OSDs](https://github.com/ceph/ceph/blob/master/src/osd/OSD.cc).
+
+To then revive the stuck pgs, repeer the newly added OSDs with `ceph osd down $osdid`.
+If this doesn't fix it, try to repeer primary OSDs of stuck pgs.
+
+Afterwards, make sure to reduce the number of PGs!
 
 
 ### MDS
