@@ -1,11 +1,9 @@
 Ceph Cheatsheet
 ===============
 
-(c) 2018-2019 Jonas Jelten <jj@stusta.net>
+(c) 2018-2020 Jonas Jelten <jj@sft.lol>
 
 Released under GPLv3 or any later version.
-
-If you ever need professional Ceph support, try https://croit.io!
 
 
 What?
