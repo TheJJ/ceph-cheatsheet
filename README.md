@@ -23,13 +23,65 @@ Component | Description
 ----------|------------
 Client | Something that connects to the Ceph cluster to access data.
 [Cluster](https://wiki.gentoo.org/wiki/Ceph/Cluster) | All Ceph components as a whole, providing storage
-[Object Store Device (OSD)](https://wiki.gentoo.org/wiki/Ceph/Object_Store_Device) | Actually stores data on disks
-[Monitor (MON)](https://wiki.gentoo.org/wiki/Ceph/Monitor) | Coordinates the cluster (odd number, >=1)
-[Metadata Server (MDS)](https://wiki.gentoo.org/wiki/Ceph/Metadata_Server) | Handles inode transactions, stored on OSDs
-Public Network | Network accessed by Ceph clients
-Cluster Network | Network by which Ceph OSD nodes sync data
-Pool | Logical partition to store objects, similar to a LVM LV
+[Object Store Device (OSD)](https://wiki.gentoo.org/wiki/Ceph/Object_Store_Device) | Actually stores data on single drive
+[Monitor (MON)](https://wiki.gentoo.org/wiki/Ceph/Monitor) | Coordinates the cluster (odd number, >=1), stores state on local disk
+[Metadata Server (MDS)](https://wiki.gentoo.org/wiki/Ceph/Metadata_Server) | Handles inode transactions, stores its state on OSDs
+
+Thing | Description
+------|------------
+Object | Data stored under a key, like a C++ `unordered_map` or Python `dict`
+Pool | Group of objects to store in the same way (redundancy, placement), access realm
+Namespace | Partition of a pool into another access realm
 [Placement Group](http://docs.ceph.com/docs/hammer/rados/operations/placement-groups/) | Group of objects within a pool
+
+
+Principle
+---------
+
+All services store their data as objects, usually 4MiB size.
+A huge file or a block device is thus split up into 4MiB pieces.
+
+An object is "randomly" placed on some OSDs, depending on placement rules to ensure desired redundancy.
+
+Ceph provides basically 4 services to clients:
+* Block device ([RBD](https://docs.ceph.com/en/latest/rbd/))
+* Network filesystem ([CephFS](https://docs.ceph.com/en/latest/cephfs//))
+* Object gateway ([RGW, S3, Swift](https://docs.ceph.com/en/latest/radosgw/))
+* Raw key-value storage via [(lib)rados](https://docs.ceph.com/en/latest/man/8/rados/)
+
+A ceph-client is e.g.
+* Linux kernel that has CephFS mounted, e.g. at `/srv/hugestorage`
+* Linux kernel that has a RBD mapped as `/dev/rbd42`, on top of which can be LVM, a filesystem, ...
+* QEMU that uses a RBD as virtual disk for the VM
+* NFS Ganesha that converts a CephFS directory to NFS
+* The `ceph`, `rbd`, `rados`, ... commandline tools
+
+
+### Data placement
+
+Why does Ceph scale? Why is it secure™ and safe™?
+
+Object read/write:
+* Select a pool to operate on
+* A pool has `2^x` placement groups
+* A placement group is placed on OSDs by CRUSH, respecting the desired redundancy
+* The redundancy is e.g. "3 copies on separate servers" (3 OSDs) or "raid 6 on 12 servers" (12 OSDs)
+
+To find an object in the cluster:
+* Hash the object's key
+* Take the last x bit of the hash
+* Use the hash bits to choose the placement group
+* Now talk to the primary OSD of this placement group to access this object
+
+Since all data is chunked into (usually) 4MiB blocks, each of the blocks of big movie is on a different PG, i.e. on different OSDs, thus we talk to a different primary OSD for each block.
+
+-> All requests are spread accross all OSDs of the whole cluster
+
+Recovery: When the desired redundancy is no longer met (drive-, server-, rack-failure), Ceph recreates the missing data.
+
+Adding OSDs: move (backfill) some of the existing placement groups to the new OSDs.
+
+Removing OSDs: move (backfill) the placement groups on the to-be-removed OSDs to others that are not removed.
 
 
 Setup
@@ -154,6 +206,7 @@ ceph config-key dump | grep dm-crypt
 * Add the OSDs with normal procedure as above
 * Let all OSDs peer, this might take a few minutes
 * `ceph osd unset norebalance nobackfill`
+  * now the cluster fills up the new OSDs
 * Everything's done once cluster is on `HEALTH_OK` again
 
 
@@ -298,10 +351,19 @@ ceph osd pool set lol_metadata min_size 2
 
 ```
 # in the same CephFS, there can be multiple storage policies
-# for example, this 7+3 pool can be to store some directories 'more safe'
-ceph osd erasure-code-profile set backup_7_3 k=7 m=3 crush-failure-domain=osd
-ceph osd pool create lol_backup 64 64 erasure backup_7_3
+# for example, this 8+3 pool can be to store some directories 'more safe'
+ceph osd erasure-code-profile set backup_8_3 k=8 m=3 crush-failure-domain=osd
+ceph osd pool create lol_backup 64 64 erasure backup_8_3
 ceph osd pool set lol_backup allow_ec_overwrites true
+```
+
+Pool quotas
+```
+# set max storage bytes to 1TiB (uses shell-calculation)
+ceph osd pool set-quota funny_pool_name max_bytes $((1 * 1024 ** 4))
+
+# limit number of objects
+ceph osd pool set-quota funny_pool_name max_objects 1000000
 ```
 
 #### Placement group autoscaling
@@ -315,9 +377,11 @@ ceph mgr module enable pg_autoscaler
 ceph osd pool autoscale-status
 
 # policy for newly created pools
+# I recommend setting warn, and _not_ on.
 ceph config set global osd_pool_default_pg_autoscale_mode <mode>
 
 # policy per-pool
+# warn, on or off. recommended by me: warn.
 ceph osd pool set $pool pg_autoscale_mode <mode>
 ```
 
@@ -672,7 +736,7 @@ debug ms = 0/0
 ```
 
 To speed up [pool reads](http://docs.ceph.com/docs/master/rados/operations/pools/#fast-read), the primary OSD queries **all** shards (not only the non-parity ones) of the data, and take the fastest reply.
-This is useful for reading small files with CephFS, but of course is a tradeoff for more network traffic between OSDs.
+This is useful for reading small files with CephFS, but of course is a tradeoff for more network traffic and iops from OSDs.
 ```
 ceph osd pool set cephfs_data_pool fast_read 1
 ```
@@ -734,6 +798,7 @@ http://docs.ceph.com/docs/master/rados/operations/monitoring-osd-pg/
 ```
 # cluster usage
 ceph df
+ceph df detail
 
 # pool usage
 rados df
@@ -993,12 +1058,18 @@ ceph mds repaired $cephfs_name:0
 
 ### Recovery
 
+Data movement/recreation can be done as `backfill` or `recovery`.
+* `backfill`: Handles a whole PG
+* `recovery`: Handles small parts of a PG (e.g. a few objects)
+
+Of course this utilizes the OSD, so it's slower for your client requests.
+
 ```
-# speed improvements
-# set number of pg-backfills for one osd
+# speed improvements (or reduction)
+# set number of active pg-backfills for one osd
 ceph tell 'osd.*' injectargs -- --osd_max_backfills=4
 
-# no forced sleeptime for recovery
+# forced sleeptime in ms between recovery operations
 ceph tell 'osd.*' injectargs -- --osd_recovery_sleep_hdd=0
 ```
 
