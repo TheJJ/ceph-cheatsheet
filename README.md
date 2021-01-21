@@ -1,7 +1,7 @@
 Ceph Cheatsheet
 ===============
 
-(c) 2018-2020 Jonas Jelten <jj@sft.lol>
+(c) 2018-2021 Jonas Jelten <jj@sft.lol>
 
 Released under GPLv3 or any later version.
 
@@ -542,6 +542,24 @@ Alternatively, you can grant access to pools explicitly: `allow rw pool=poolname
 Access is better restricted by [namespace](#namespace), though: Namespaces are pool-independent and there can be many namespaces per pool.
 
 
+##### RBD datapool for client
+
+Some client tools don't support specifying an RBD data pool.
+
+With this "trick", you can set a RBD data pool with erasure coding in OpenStack Cinder, Proxmox, ...
+
+By selecting one `ceph.conf` and a client name, we set the data pool name as default.
+If needed, you can have more ceph.conf files, as long as your client tool allows specifying at least the config file name...
+
+```
+[global]
+fsid = your-fs-id
+mon_host = mon1.rofl.lol, mon2.rofl.lol, mon3.rofl.lol
+
+[client.your-awesome-user]
+rbd default data pool = your-ec-poolname
+```
+
 ##### Namespace
 
 OSD access would allow reading (and writing!) CephFS objects directly in the pool, even though the MDS prevents mounts through the path restriction.
@@ -775,6 +793,16 @@ osd memory target = 4294967296   # 4GiB
 * [Authentication config](http://docs.ceph.com/docs/master/rados/configuration/auth-config-ref/)
 
 
+### Minimal client config
+
+The minimal config required e.g. for mounting CephFS or mapping a RBD:
+
+```
+[global]
+fsid = your-fs-id
+mon_host = mon1.rofl.lol, mon2.rofl.lol, mon3.rofl.lol, ...
+```
+
 Operation
 ---------
 
@@ -792,6 +820,7 @@ htop            # osd i/o stats per thread
 ```
 
 http://docs.ceph.com/docs/master/rados/operations/monitoring-osd-pg/
+
 
 ### Utilization
 
