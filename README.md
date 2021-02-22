@@ -11,7 +11,7 @@ What?
 
 [Ceph](https://ceph.com/) is a distributed storage cluster.
 
-[Debugging](http://docs.ceph.com/docs/master/rados/troubleshooting/log-and-debug/).
+[Debugging](https://docs.ceph.com/en/latest/rados/troubleshooting/log-and-debug/).
 
 [Other Cheatsheet](https://sabaini.at/pages/ceph-cheatsheet.html).
 
@@ -32,7 +32,7 @@ Thing | Description
 Object | Data stored under a key, like a C++ `unordered_map` or Python `dict`
 Pool | Group of objects to store in the same way (redundancy, placement), access realm
 Namespace | Partition of a pool into another access realm
-[Placement Group](http://docs.ceph.com/docs/hammer/rados/operations/placement-groups/) | Group of objects within a pool
+[Placement Group](https://docs.ceph.com/en/latest/rados/operations/placement-groups/) | Group of objects within a pool
 
 
 Principle
@@ -45,7 +45,7 @@ An object is "randomly" placed on some OSDs, depending on placement rules to ens
 
 Ceph provides basically 4 services to clients:
 * Block device ([RBD](https://docs.ceph.com/en/latest/rbd/))
-* Network filesystem ([CephFS](https://docs.ceph.com/en/latest/cephfs//))
+* Network filesystem ([CephFS](https://docs.ceph.com/en/latest/cephfs/))
 * Object gateway ([RGW, S3, Swift](https://docs.ceph.com/en/latest/radosgw/))
 * Raw key-value storage via [(lib)rados](https://docs.ceph.com/en/latest/man/8/rados/)
 
@@ -87,25 +87,25 @@ Removing OSDs: move (backfill) the placement groups on the to-be-removed OSDs to
 Setup
 -----
 
-What [hardware?](http://docs.ceph.com/docs/master/start/hardware-recommendations/)
+What [hardware?](https://docs.ceph.com/en/latest/start/hardware-recommendations/)
 
 Ceph needs an odd number of >=1 MONs to [get a quorum](https://en.wikipedia.org/wiki/Paxos_(computer_science)).
 
-For better understanding the setup, I recommend the [manual method](http://docs.ceph.com/docs/master/install/manual-deployment/).
+For better understanding the setup, I recommend the [manual method](https://docs.ceph.com/en/latest/install/index_manual/).
 
-For config options, see the [upstream documentation](http://docs.ceph.com/docs/master/rados/configuration/ceph-conf/).
+For config options, see the [upstream documentation](https://docs.ceph.com/en/latest/rados/configuration/ceph-conf/).
 
 
 ### Monitor Setup
-[Monitor config documentaion](http://docs.ceph.com/docs/master/rados/configuration/mon-config-ref/)
+[Monitor config documentaion](https://docs.ceph.com/en/latest/rados/configuration/mon-config-ref/)
 
 Follow the 'manual method' above to add a `ceph-$monid` monitor, where `$monid` usually is a letter from `a-z`,
 but we use creative names (the host name).
 
 Monitors don't use `ceph.conf` for their addressing, they store it internally.
-[IP changing guide](http://docs.ceph.com/docs/master/rados/operations/add-or-rm-mons/#changing-a-monitor-s-ip-address).
+[IP changing guide](https://docs.ceph.com/en/latest/rados/operations/add-or-rm-mons/#changing-a-monitor-s-ip-address).
 
-For more hosts, [monitors can be added](http://docs.ceph.com/docs/master/rados/operations/add-or-rm-mons/).
+For more hosts, [monitors can be added](https://docs.ceph.com/en/latest/rados/operations/add-or-rm-mons/).
 
 
 #### Settings
@@ -131,7 +131,7 @@ ceph-mon --inject-monmap --name mon.monname /tmp/monmap
 
 
 ### Manager Setup
-[Manager config documentation](http://docs.ceph.com/docs/master/mgr/administrator)
+[Manager config documentation](https://docs.ceph.com/en/latest/mgr/administrator/)
 
 Run one manager for each monitor.
 Offloads work from MONs and allows scaling beyond 1000 OSDs (statistics and other unimportant stuff like disk usage)
@@ -149,19 +149,19 @@ sudo -u ceph ceph-mgr -i eichhorn -d
 sudo systemctl enable --now ceph-mgr@$mgrid.service
 ```
 
-The manager provides a [shiny dashboard](http://docs.ceph.com/docs/master/mgr/dashboard) and other plugins (e.g. the [balancer](http://docs.ceph.com/docs/master/mgr/balancer/))
+The manager provides a [shiny dashboard](https://docs.ceph.com/en/latest/mgr/dashboard/) and other plugins (e.g. the [balancer](https://docs.ceph.com/en/latest/mgr/balancer/))
 
 
 ### Storage
 
-[How to add devices](http://docs.ceph.com/docs/master/ceph-volume/lvm/prepare/).
+[How to add devices](https://docs.ceph.com/en/latest/ceph-volume/lvm/prepare/).
 
 Before adding OSDs, you can do `ceph osd set noin` so new disks are not filled automatically.
 Once you want it to be filled, do `ceph osd in $osdid`.
 
 #### Add BlueStore OSD
 
-Add a [BlueStore](http://docs.ceph.com/docs/master/rados/configuration/bluestore-config-ref/) device, with the help of LVM. In the LVM tags, metainfo is stored.
+Add a [BlueStore](https://docs.ceph.com/en/latest/rados/configuration/bluestore-config-ref/) device, with the help of LVM. In the LVM tags, metainfo is stored.
 
 The data and journal (WAL) and keyvalue-DB can be placed on different devices (HDD and SSD).
 
@@ -181,7 +181,7 @@ If you use `vg/lvname` instead of `/dev/partition`, the lv is `luksFormated` and
 
 SSDs should be set up with `noop` ioscheduler, HDDs with `deadline`. These are settings of Linux.
 
-[Adding/removing OSDs](http://docs.ceph.com/docs/master/rados/operations/add-or-rm-osds/).
+[Adding/removing OSDs](https://docs.ceph.com/en/latest/rados/operations/add-or-rm-osds/).
 
 Failed OSDs can be removed with `ceph osd purge-new $id`.
 
@@ -231,7 +231,7 @@ BlueStore will automatically relocate often-used data to the fast device then.
 
 ##### Migrate of OSD journal and database
 
-With [`ceph-bluestore-tool`](https://docs.ceph.com/docs/master/man/8/ceph-bluestore-tool/), you can create, migrate expand and merge OSD block devices.
+With [`ceph-bluestore-tool`](https://docs.ceph.com/en/latest/man/8/ceph-bluestore-tool/), you can create, migrate expand and merge OSD block devices.
 
 * To move the block.db from an all-in-one OSD to a separate device, you need to overwrite the
   default size of `1G` if your new `block.db` should be bigger than that (example with a new `2G` DB):
@@ -242,7 +242,7 @@ CEPH_ARGS="--bluestore-block-db-size 2147483648" ceph-bluestore-tool --path /var
 
 * To resize a `block.db`, use `bluefs-bdev-expand` (e.g. when the underlying partition size was increased)
 * To merge separate `block.db` or `block.wal` drives onto the slow disk, use `bdev-migrate`
-* Details for the commands are in the [manpage](https://docs.ceph.com/docs/master/man/8/ceph-bluestore-tool/)
+* Details for the commands are in the [manpage](https://docs.ceph.com/en/latest/man/8/ceph-bluestore-tool/)
 
 
 ### Metadata Setup
@@ -313,7 +313,7 @@ ceph config set mgr mgr/balancer/upmap_max_deviation 1
 
 ### Erasure Coding
 
-[RAID6](http://docs.ceph.com/docs/master/rados/operations/erasure-code/) with Ceph.
+[RAID6](https://docs.ceph.com/en/latest/rados/operations/erasure-code/) with Ceph.
 
 Create a new profile, `standard_8_2` is the arbitrary name.
 ```
@@ -399,8 +399,8 @@ ceph osd pool set $poolname pg_autoscale_mode on
 
 ### Crushmap
 
-* http://docs.ceph.com/docs/master/rados/operations/crush-map/
-* http://docs.ceph.com/docs/master/rados/operations/crush-map-edits/
+* https://docs.ceph.com/en/latest/rados/operations/crush-map/
+* https://docs.ceph.com/en/latest/rados/operations/crush-map-edits/
 
 ```
 # get and decompile
@@ -467,7 +467,7 @@ rule rulename {
 
 ### CephFS
 
-On top of RADOS, Ceph provides a [POSIX filesystem](http://docs.ceph.com/docs/master/cephfs/posix/).
+On top of RADOS, Ceph provides a [POSIX filesystem](https://docs.ceph.com/en/latest/cephfs/posix/).
 
 
 #### Setup
@@ -496,7 +496,7 @@ ceph auth get client.some.weird_name
 
 ###### CephFS Quotas and Layouts
 
-To allow this client to [configure quotas and layouts](http://docs.ceph.com/docs/master/cephfs/client-auth/#layout-and-quota-restriction-the-p-flag), it needs the `p` flag. Beware that this **overwrites** existing caps, so make sure to `auth get` first, and then update.
+To allow this client to [configure quotas and layouts](https://docs.ceph.com/en/latest/cephfs/client-auth/#layout-and-quota-restriction-the-p-flag), it needs the `p` flag. Beware that this **overwrites** existing caps, so make sure to `auth get` first, and then update.
 ```
 ceph auth caps client.lolroot mon 'allow r' mds 'allow rwp' osd 'allow rw tag cephfs data=cephfsname'
 ```
@@ -583,7 +583,7 @@ CephFS namespaces are supported on kernel clients since [Linux 4.8](https://gith
 
 ##### Quota Config
 
-To set a [quota](https://docs.ceph.com/docs/master/cephfs/quota/) on a CephFS subdirectory, use:
+To set a [quota](https://docs.ceph.com/en/latest/cephfs/quota/) on a CephFS subdirectory, use:
 ```
 setfattr -n ceph.quota.max_bytes -v 20971520 /a/directory   # 20 MiB
 setfattr -n ceph.quota.max_files -v 5000 /another/dir       # 5000 files
@@ -597,7 +597,7 @@ CephFS quotas work since [Linux 4.17](https://github.com/torvalds/linux/commit/b
 ##### CephFS Snapshots
 
 A client with the `s` permission for MDS can manage snapshots.
-A [snapshot](https://docs.ceph.com/docs/master/dev/cephfs-snapshots/) is created by creating a directory: `dir/to/backup/.snap/snapshot_name`.
+A [snapshot](https://docs.ceph.com/en/latest/dev/cephfs-snapshots/) is created by creating a directory: `dir/to/backup/.snap/snapshot_name`.
 
 
 #### Status
@@ -669,7 +669,7 @@ rbd bench --io-type rw $poolname/$imagename
 
 Some Linux kernel `rbd` clients ("krbd") don't support all features of `rbd` images.
 
-Available `rbd` features declared [here](https://github.com/ceph/ceph/blob/master/src/include/rbd/features.h) and listed [here](http://docs.ceph.com/docs/master/man/8/rbd/#cmdoption-rbd-image-feature) and defined [in the kernel code](https://github.com/torvalds/linux/blob/master/drivers/block/rbd.c).
+Available `rbd` features declared [here](https://github.com/ceph/ceph/blob/master/src/include/rbd/features.h) and listed [here](https://docs.ceph.com/en/latest/man/8/rbd/#cmdoption-rbd-image-feature) and defined [in the kernel code](https://github.com/torvalds/linux/blob/master/drivers/block/rbd.c).
 
 Supported krbd features:
 * Since [Linux 5.3](https://github.com/torvalds/linux/blob/v5.3/drivers/block/rbd.c#L113) support for `object-map` and `fast-diff`
@@ -689,7 +689,7 @@ rbd --pool $meta_data_pool --namespace $namespacename feature disable $imagename
 
 
 
-#### [More stuff](http://docs.ceph.com/docs/master/rbd/rados-rbd-cmds/)
+#### [More stuff](https://docs.ceph.com/en/latest/rbd/rados-rbd-cmds/)
 
 * When you have a fresh rbd device, use `mkfs.ext4 -E nodiscard` to skip the discard step
 * List images: `rbd ls $meta_pool_name`
@@ -701,7 +701,7 @@ rbd --pool $meta_data_pool --namespace $namespacename feature disable $imagename
 
 #### Automatic mapping
 
-Automatic RBD mapping with [`rbdmap.service`](http://docs.ceph.com/docs/master/man/8/rbdmap), configured in `/etc/ceph/rbdmap`:
+Automatic RBD mapping with [`rbdmap.service`](https://docs.ceph.com/en/latest/man/8/rbdmap), configured in `/etc/ceph/rbdmap`:
 
 ```
 $poolname/$namespacename/$imagename name=client.$username,keyring=/etc/ceph/ceph.client.$username.keyring
@@ -753,7 +753,7 @@ Set it to 0 in your `ceph.conf`:
 debug ms = 0/0
 ```
 
-To speed up [pool reads](http://docs.ceph.com/docs/master/rados/operations/pools/#fast-read), the primary OSD queries **all** shards (not only the non-parity ones) of the data, and take the fastest reply.
+To speed up [pool reads](https://docs.ceph.com/en/latest/rados/operations/pools/#fast-read), the primary OSD queries **all** shards (not only the non-parity ones) of the data, and take the fastest reply.
 This is useful for reading small files with CephFS, but of course is a tradeoff for more network traffic and iops from OSDs.
 ```
 ceph osd pool set cephfs_data_pool fast_read 1
@@ -789,8 +789,8 @@ osd memory target = 4294967296   # 4GiB
 
 ### Random infos
 
-* [Network config](http://docs.ceph.com/docs/master/rados/configuration/network-config-ref/)
-* [Authentication config](http://docs.ceph.com/docs/master/rados/configuration/auth-config-ref/)
+* [Network config](https://docs.ceph.com/en/latest/rados/configuration/network-config-ref/)
+* [Authentication config](https://docs.ceph.com/en/latest/rados/configuration/auth-config-ref/)
 
 
 ### Minimal client config
@@ -806,7 +806,7 @@ mon_host = mon1.rofl.lol, mon2.rofl.lol, mon3.rofl.lol, ...
 Operation
 ---------
 
-[How to operate the cluster](http://docs.ceph.com/docs/master/rados/operations/)
+[How to operate the cluster](https://docs.ceph.com/en/latest/rados/operations/)
 
 ### Cluster status
 
@@ -819,7 +819,7 @@ iotop           # io status
 htop            # osd i/o stats per thread
 ```
 
-http://docs.ceph.com/docs/master/rados/operations/monitoring-osd-pg/
+https://docs.ceph.com/en/latest/rados/operations/monitoring-osd-pg/
 
 
 ### Utilization
@@ -941,7 +941,7 @@ sudo pvremove /dev/device1
 
 ### Device control
 
-http://docs.ceph.com/docs/master/rados/operations/control/
+https://docs.ceph.com/en/latest/rados/operations/control/
 
 ```
 # stop client traffic
@@ -1104,7 +1104,7 @@ ceph tell 'osd.*' injectargs -- --osd_recovery_sleep_hdd=0
 
 ### Data Corruption
 
-http://docs.ceph.com/docs/master/rados/troubleshooting/troubleshooting-pg/
+https://docs.ceph.com/en/latest/rados/troubleshooting/troubleshooting-pg/
 
 ```
 # check for pg status
@@ -1171,7 +1171,7 @@ ceph-kvstore-tool <rocksdb|bluestore-kv> /var/lib/ceph/osd/ceph-$id compact
 
 #### Incomplete PGs
 
-[`incomplete`](http://docs.ceph.com/docs/master/rados/operations/pg-states/) PG state means Ceph is afraid of starting the PG.
+[`incomplete`](https://docs.ceph.com/en/latest/rados/operations/pg-states/) PG state means Ceph is afraid of starting the PG.
 
 If the `ceph pg $pgid query` for a `incomplete` pg says `les_bound` blocked, the following might help.
 
