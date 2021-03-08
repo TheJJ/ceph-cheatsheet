@@ -162,17 +162,25 @@ Enable it:
 ceph mgr module enable crash
 ```
 
+Setup crash collection with `ceph-crash.service`:
+
 On each of your servers with OSDs etc, deploy `/etc/ceph/ceph.client.crash.keyring`, containing the key for `client.crash`, created like this:
 
 ```
 ceph auth get-or-create client.crash mon 'profile crash' mgr 'profile crash'
+
+# or, restrict the crash reports to a specific subnet!
+ceph auth get-or-create client.crash mon 'profile crash' mgr 'profile crash network 1337.42.42.0/24'
 ```
 
-You will see new crashes in `ceph status`. You can then view details about crashes with `ceph crash` etc.
-
-
+Then enable and start `ceph-crash.service`.
 `ceph-crash.service` runs on on each server periodically looks inside `/var/lib/ceph/crash` for new-to-report crashes, and then uses `ceph crash post` to send them to the MGR.
-In order to post, it tries `client.crash` as username, and to submit we need both `mgr` and `mon` caps, otherwise the upload will fail with `[errno 13] error connecting to the cluster` and `Error EACCES: access denied: does your client key have mgr caps?`.
+In order to post, it tries `client.crash` as username, and to submit we need both `mgr` and `mon` `crash`-caps, otherwise the upload will fail with `[errno 13] error connecting to the cluster` and `Error EACCES: access denied: does your client key have mgr caps?`.
+
+The `profile crash` allows you running `ceph crash post` (which the `ceph-crash` uses to actually report stuff).
+
+New crashes appear in `ceph status`.
+Details: `ceph crash`
 
 
 ### Storage
