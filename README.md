@@ -11,9 +11,12 @@ What?
 
 [Ceph](https://ceph.com/) is a distributed storage cluster.
 
-[Debugging](https://docs.ceph.com/en/latest/rados/troubleshooting/log-and-debug/).
+In this file, I try to compress my knowledge and recommendations about operating Ceph clusters.
 
-[Other Cheatsheet](https://sabaini.at/pages/ceph-cheatsheet.html).
+I'm sorry for the chaos in this cheatsheet, it basically serve(s/d) as my searchable command reference...
+If you think it's worth a shot, please submit pullrequests.
+
+[How to debug](https://docs.ceph.com/en/latest/rados/troubleshooting/log-and-debug/).
 
 
 Components
@@ -51,10 +54,13 @@ Ceph provides basically 4 services to clients:
 
 A ceph-client is e.g.
 * Linux kernel that has CephFS mounted, e.g. at `/srv/hugestorage`
+  * which provides you a mounted directory where you can store whatever you want
 * Linux kernel that has a RBD mapped as `/dev/rbd42`, on top of which can be LVM, a filesystem, ...
+  * which you can then use like a regular block device/filesystem for whatever Linux service you want
 * QEMU that uses a RBD as virtual disk for the VM
 * NFS Ganesha that converts a CephFS directory to NFS
-* The `ceph`, `rbd`, `rados`, ... commandline tools
+* Samba that uses `vfs_ceph` to provide CephFS directories via CIFS
+* The `ceph`, `rbd`, `rados`, ... commandline tools (yes, they're just clients).
 
 
 ### Data placement
@@ -79,13 +85,67 @@ Since all data is chunked into (usually) 4MiB blocks, each of the blocks of big 
 
 Recovery: When the desired redundancy is no longer met (drive-, server-, rack-failure), Ceph recreates the missing data.
 
-Adding OSDs: move (backfill) some of the existing placement groups to the new OSDs.
+Adding OSDs: move (backfill) some of the existing placement groups to the new OSDs so every OSD hopefully stores roughly the same amount of data.
 
-Removing OSDs: move (backfill) the placement groups on the to-be-removed OSDs to others that are not removed.
+Removing OSDs: move (backfill) the placement groups existing on the to-be-removed OSDs to others that are not removed.
 
 
 Setup
 -----
+
+Ceph generally **works very well** if you use it like others are using it.
+Once you deviate from the default, [prepare for unforseen consequences](https://www.youtube.com/watch?v=xtrqYdvZ29E).
+
+But *I*'ve never lost a bit of data so far, I had to apply extensive massage a few times, but I got it to recover every time (so far).
+
+
+### Architecture
+
+Ceph is pretty flexible, and things work "better" the more uniform your setup is.
+All in all you have to run Ceph's components on the machines you have, so storage is created magically.
+
+As a reminder, the components:
+* client: e.g. a Linux kernel, a QEMU process, a samba or NFS server to provide storage for a VM, a webserver, BigBlueButton recordings, whatever.
+* MON: cluster synchronizer, you should have `2n+1` many of them, usually 3 or 5 so you can tolerate 1 or 2 outages (or rather: maintenances).
+* OSD: a single key-value storage device, which actually stores all data
+* MGR: statistics collector, where e.g. OSDs report to
+* MDS: CephFS inode metadata service, which uses OSDs to store its metadata, and clients write and retrieve data pointed to by the MDS metadata directly from OSDs.
+
+How you create it, is up to you, but know this:
+
+* OSD:
+  * Each OSD requires >1GiB RAM, I recommend 4GiB. It's mainly for caching, configurable with `osd_memory_target`.
+  * It needs a quite capable CPU (e.g. the erasure coding, compression, and of course the regular storage request path).
+* MON:
+  * The CPU doesn't need to be too crazy, but should be good enough.
+  * The MON storage should be fast: All management actions are quicker then.
+* MDS:
+  * The CPU should be quite capable when handling lots of requests, otherwise not super important.
+  * The MDS metadata-pool (the CephFS metadata) should be very fast.
+  * The MDS itself needs lots of ram, depending on your filesystem open file count (usually >4GiB, but can be >32GiB for millions of files).
+* MGR:
+  * Doesn't need any storage, just a medium-grade CPU and 2G RAM maybe.
+
+You can run these services on any device that's suitable, combine them, provide the actual storage drives over FibreChannel to a Linux server running the Ceph OSDs, whatever.
+
+For example:
+* 1 Server. Run one MON, one MGR and OSDs, and two MDS (if you use CephFS).
+  * I'd say if you want at least some performance, have at least 6 OSDs
+  * You can store data in replicated or erasure coded pools
+  * In such a "cluster" you can still store >500T, I know such a thing...
+* 3 Servers. All have a MON and a couple of OSDs. You store data by in a replicated pool, each data copy on a separate server.
+* Many Servers. Each has some OSDs (4 to 64) and all are clustered together.
+  * Separate servers for MONs and OSDS.
+  * Ideally also independent MDS servers (if you use CephFS), but you can run them on the MON server with enough RAM.
+  * You can store data in erasure coded (EC, a bit like a RAID5/6/...) pools, but you need sufficiently many servers then, or else it has to behave like one big server and things go down whenever you restart only one of them.
+  * That's the "standard" setup.
+
+Each server should have 2x10GiB bond/link aggregation or at least 10GiB connectivity.
+
+I wouldn't create separate "public" and "cluster" networks, since having one big link provides more peak performance for both scenarios - more internal and external traffic bandwidth.
+
+
+### Setup Links
 
 What [hardware?](https://docs.ceph.com/en/latest/start/hardware-recommendations/)
 
@@ -814,7 +874,7 @@ ceph osd crush tunables optimal
 Set the amount of memory one OSD should occupy. It will adjust its cache sizes automatically.
 ```
 [osd]
-osd memory target = 4294967296   # 4GiB
+osd_memory_target = 4294967296   # 4GiB
 ```
 
 
@@ -868,17 +928,26 @@ ceph osd pool stats
 ceph osd tree
 ceph osd df tree
 
+# osd commit latency performance
+ceph osd perf
+
 # pg status and performance
 ceph pg stat
 ceph pg ls
 ceph pg dump
 ceph pg $pgid query
 
-# osd performance
-ceph osd perf
+# what pgs are on this osd?
+ceph pg ls-by-osd $osdid
+
+# list all pgs where the primary is the given osd
+ceph pg ls-by-primary $osdid
 ```
 
 ### Daemon control and info
+
+You have to issue `ceph daemon` commands on the machine where the daemon is running, since it uses its "admin socket" (asok).
+The "remote" variant is to use `ceph tell` instead of `ceph daemon`, which works for most commands.
 
 ```
 ceph daemon $daemonid help
@@ -903,6 +972,7 @@ ceph daemon mds.$id cache status
 ```
 
 ```
+# view configuration differences etc
 ceph daemon $daemontype.$id config diff|get|set|show
 ```
 
