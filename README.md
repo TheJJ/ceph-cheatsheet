@@ -745,16 +745,6 @@ To map an image on a client to `/dev/rbdxxx` (using monitor addresses from `/etc
   * `-t nbd` to mount as nbd-device
   * `--namespace $namespacename` to specify the rbd namespace (as an alternative to the image "path" above)
 
-#### Benchmarking
-
-```
-rbd bench --io-type rw $poolname/$imagename
-# other io types: read, write, rw
-# --io-pattern seq rand
-# --io-size $oneiosize (with B/K/M/G/T suffix)
-# --io-total $totalbytecount (with suffix)
-# --io-threads $threadcount
-```
 
 #### Kernel client
 
@@ -821,15 +811,6 @@ Show connected RBD clients and their IPs
 ```
 rbd status $pool/$namespace/$image
 ```
-
-### Tipps
-
-* If health is warning, fix quickly (not just after one week) (enable auto-repair)!
-* A single dying (SATA) disk can slow down the whole cluster because of slow ops! Replace them! Use SMART and `ceph osd perf` to find them.
-* More safety: `min_size` at least +1 than really required (`ceph osd pool ls detail`)
-* Never use `ceph osd crush reweight`, only use `ceph osd reweight`: crush rules are restored again on restart and absolute to device size, osd weight is persistent and from 0 to 1!
-* Never use `reweight-by-utilization`, instead use **balancer plugin** in `mgr`
-* When giving storage to a VM, use [`virtio-scsi`](https://wiki.gentoo.org/wiki/QEMU/Options#Hard_drive) instead of `virtio-blockdevice` and enable discard/unmapping.
 
 
 ### Performance
@@ -1101,20 +1082,61 @@ ceph osd crush set-device-class nvme osd.$osdid
 
 ### Device performance
 
+#### Raw device speed
+
 [Collection of benchmarked devices](https://github.com/TheJJ/ceph-diskbench)
 
-To benchmark device speed:
+To benchmark the raw device write operation speed:
 
 ```
 # 4k sequential write with sync
-fio --filename=/dev/device --direct=1 --sync=1 --iodepth=1 --runtime=60 --time_based --rw=write --bs=4k --numjobs=1 --group_reporting --name=ceph-journal-write-test
+fio --filename /dev/device --numjobs=1 --direct=1 --fdatasync=1 --ioengine=pvsync --iodepth=1 --runtime=20 --time_based --rw=write --bs=4k --group_reporting --name=ceph-iops
 ```
 
-When `ceph-journal-write-test` results are shown, look at `iops=XXXXX`.
+When `ceph-iops` results are shown, look at `write: IOPS=XXXXX`.
 
 * SSDs should have >10k iops
-* HDDs should have >10 iops
-* Bad SSDs have <100 iops => >10ms latency
+* HDDs should have >100 iops
+* Bad SSDs have <200 iops => >5ms latency
+
+#### OSD speed
+
+Before taking an OSD `in`, check its speed! Otherwise it can slow down your whole cluster.
+
+Benchmark a running OSD how many object writes it can do:
+```
+# let the osd write objects of given size until amount is reached
+ceph tell osd.$osdid bench $data_amount $object_size
+```
+
+Some examples with "expected" values for "good" performance:
+* 256MiB with 128KiB objects: `ceph tell osd.$osdid bench $((256 * 1024**2)) $((128 * 1024**1))`
+  * HDD: >300 iops
+  * SSD: >1500 iops
+* 1GiB with 1MiB objects: `ceph tell osd.$osdid bench $((1 * 1024**3)) $((1 * 1024**2))`
+  * HDD: >50 iops
+  * SSD: >200 iops
+
+
+#### RADOS speed
+
+Use `rados bench`!
+
+
+#### RBD speed
+
+```
+rbd bench --io-type rw $poolname/$imagename
+# other io types: read, write, rw
+# --io-pattern seq rand
+# --io-size $oneiosize (with B/K/M/G/T suffix)
+# --io-total $totalbytecount (with suffix)
+# --io-threads $threadcount
+```
+
+#### CephFS speed
+
+Benchmark a single file within CephFS, or use Bonnie++.
 
 
 ### PG Autoscale
@@ -1338,3 +1360,36 @@ ceph.vdo=0
 
 lvchange --addtag $tag_to_set /dev/path-to-now-decrypted-vg
 ```
+
+## Tricks
+
+### Performance
+
+#### Tune Huge RBD
+
+You can use LVM (or MD) to group together multiple RBDs to one device.
+
+See the configured io sizes with `lsblk --topology`. The larger, the better, as Ceph doesn't like small IO.
+
+
+### Available Space
+
+* Use Erasure Coding to trade-off latency and speed with usable space.
+
+* Activate the `ceph balancer`. If it doesn't help, try my balancer: https://github.com/TheJJ/ceph-balancer
+
+
+### Tipps
+
+* More safety: Always have `min_size` at least +1 than really required (`ceph osd pool ls detail`)
+  * Why? Every write should have at least one redundant OSD, even when you're down to `min_size`. Because if another disk dies when you're at `min_size` without a redundant OSD _everything_ is lost.
+* If health is warning, fix quickly (not just after one week) (enable auto-repair)!
+* A single dying (SATA) disk can slow down the whole cluster because of slow ops! Replace them!
+  * Use SMART and `ceph osd perf` to find them (and prometheus to see read/write op latencies, and use prometheus node-exporter to see high io-loads)
+  * Each operation handled by this disk will have to complete, so if it has write times of 1s, things will slow down considerably.
+* Don't set `ceph osd reweight` to values other than 0 and 1 (= `ceph osd out/in`), except when you know what you're doing.
+  * The problem is that the bucket (e.g. host) weight is unaffected by the reweight, thus probability of placing a pg on the host you just reweighted remains the same, so other OSDs in the same host will get more PGs than they would get by their size.
+  * A value of 0 also leads to this behavior.
+  * To artificially shrink devices, use `ceph osd crush reweight` instead
+* Activate the **balancer plugin** in `mgr` or use jj's ceph balancer to optimize storage + load distribution.
+* When giving storage to a VM, use [`virtio-scsi`](https://wiki.gentoo.org/wiki/QEMU/Options#Hard_drive) instead of `virtio-blockdevice` and enable discard/unmapping.
