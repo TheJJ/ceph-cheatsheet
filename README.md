@@ -348,7 +348,7 @@ sudo -u ceph ceph auth add mds.$mdsid osd "allow rwx" mds "allow" mon "allow pro
 sudo systemctl enable --now ceph-mds@$mdsid.service
 ```
 
-Multiple MDS servers can be active, they distribute the inode workload. Kernel clients support this since Linux 4.14.
+Multiple MDS servers can be active, they distribute the inode workload. Kernel clients support this [since Linux 4.14](#Kernel feature list).
 
 To assign a hot-standby to every active MDS:
 
@@ -390,10 +390,11 @@ ceph balancer rm myplan
 ceph tell 'mgr.$activemgrid' balancer status
 ```
 
-use `upmap` mode: relocate single PGs as "override" to CRUSH.
+Use `upmap` mode: relocate single PGs as "override" to CRUSH.
+Needs Ceph Luminous and [Linux kernel 4.13](#Kernel feature list).
 ```
-# to use upmap as balancer mode, the client must be luminous!
-# kernel >=4.13 supports this (even though the command complains about a too old client)
+# If you have Luminous and kernel >=4.13 it may still complain about a too old client,
+# but we know what we're doing :)
 ceph osd set-require-min-compat-client luminous --yes-i-really-mean-it
 ```
 
@@ -669,7 +670,7 @@ ceph auth caps client.somename mds 'allow rw path=/directory/name' mon 'allow r'
 
 You can grant access to multiple namespaces to a CephFS client with `allow rw namespace=$ns1, allow r namespace=$ns2, allow rw ....`.
 
-CephFS namespaces are supported on kernel clients since [Linux 4.8](https://github.com/torvalds/linux/commit/72b5ac54d620b29cae23d25f0405f2765b466f72).
+CephFS namespaces are supported on kernel clients since [Linux 4.8](#Kernel feature list) (https://github.com/torvalds/linux/commit/72b5ac54d620b29cae23d25f0405f2765b466f72).
 
 
 ##### Quota Config
@@ -720,14 +721,14 @@ ceph tell mds.$mdsid client ls
 * Create pools: One non-EC pool for metadata first, optionally more data pools
 * If a data pool is an EC-Pool, allow `ec_overwrites` on it
   * `ceph osd pool set lol_pool allow_ec_overwrites true`
-  * [Linux 4.11](https://github.com/torvalds/linux/commit/b2deee2dc06db7cdf99b84346e69bdb9db9baa85) is required if the Kernel should map the RBD
+  * [Linux 4.11](#Kernel feature list) is required if the Kernel should map the RBD
 * Prepare all pools for RBD usage: `rbd pool init $pool_name`
 * If you have a pool named `rbd`, it's the default (metadata) rbd pool
 * You can store rbd data and metadata on separate pools, see the `--data-pool` option below
 
 Now, images can be created in that pool:
 
-* Optionally, create a rbd namespace to restrict access to that image (supported since Nautilus 14.0 and Kernel 4.19):
+* Optionally, create a rbd namespace to restrict access to that image (supported since Nautilus 14.0 and [Kernel 4.19](#Kernel feature list)):
   * `rbd --pool $poolname --namespace $namespacename namespace create`
 
 * **Create** an image: `rbd create --pool $metadata_pool_name --data-pool $storage_pool_name --namespace $namespacename --size 20G $imagename`
@@ -746,18 +747,13 @@ To map an image on a client to `/dev/rbdxxx` (using monitor addresses from `/etc
   * `--namespace $namespacename` to specify the rbd namespace (as an alternative to the image "path" above)
 
 
-#### Kernel client
+#### Kernel RBD client
 
 Some Linux kernel `rbd` clients ("krbd") don't support all features of `rbd` images.
 
 Available `rbd` features declared [here](https://github.com/ceph/ceph/blob/master/src/include/rbd/features.h) and listed [here](https://docs.ceph.com/en/latest/man/8/rbd/#cmdoption-rbd-image-feature) and defined [in the kernel code](https://github.com/torvalds/linux/blob/master/drivers/block/rbd.c).
 
-Supported krbd features:
-* Since [Linux 5.3](https://github.com/torvalds/linux/blob/v5.3/drivers/block/rbd.c#L113) support for `object-map` and `fast-diff`
-* Since [Linux 5.1](https://github.com/torvalds/linux/blob/v5.1/drivers/block/rbd.c#L113) support for `deep-flatten`
-* Since [Linux 4.11](https://github.com/torvalds/linux/blob/v4.11/drivers/block/rbd.c#L113) support for `data-pool`
-* Since [Linux 4.9](https://github.com/torvalds/linux/blob/v4.9/drivers/block/rbd.c#L113) support for `exclusive-lock`
-* Since [Linux 3.10](https://github.com/torvalds/linux/blob/v4.9/drivers/block/rbd.c#L113) support for `striping`
+krbd kernel features: [see in the kernel feature list](#Kernel feature list)
 
 ```
 # if you get this dmesg-output:
@@ -1361,35 +1357,67 @@ ceph.vdo=0
 lvchange --addtag $tag_to_set /dev/path-to-now-decrypted-vg
 ```
 
+## Kernel Feature List
+
+Notable Linux kernel feature changes:
+
+Supported krbd features:
+* [Linux 5.16](https://github.com/torvalds/linux/commit/0ecca62beb12eeb13965ed602905c8bf53ac93d0) [CephFS default `async dirops`](https://github.com/torvalds/linux/commit/f7a67b463fb83a4b9b11ceaa8ec4950b8fb7f902) [(talk)](https://www.usenix.org/sites/default/files/conference/protected-files/vault20_slides_layton.pdf) (open, unlink, ... speedup) (feature available since Linux 5.7)
+* [Linux 5.7](https://github.com/torvalds/linux/commit/fcc95f06403c956e3f50ca4a82db12b66a3078e0) CephFS [`async dirops`](https://github.com/torvalds/linux/commit/a25949b99003b7e6c2604a3fc8b8d62385508477) feature (`nowsync` mount flag + Octopus needed), [rbd multi blk-mq](https://github.com/torvalds/linux/commit/f9b6b98d24f7cec5b8269217f9d4fdec1ca43218)
+* [Linux 5.3](https://github.com/torvalds/linux/commit/d9b9c893048e9d308a833619f0866f1f52778cf5) [krbd support for `object-map` and `fast-diff`](https://github.com/torvalds/linux/commit/22e8bd51bb0469d1a524130a057f894ff632376a), [selinux xattr support](https://github.com/torvalds/linux/commit/ac6713ccb5a6d13b59a2e3fda4fb049a2c4e0af2)
+* [Linux 5.1](https://github.com/torvalds/linux/commit/2b0a80b0d0bb0a3db74588279bf851b28c6c4705) [krbd support for `deep-flatten`](https://github.com/torvalds/linux/commit/b9f6d447a6f67b2acc3c4a9d9adc2508986e8df9)
+* [Linux 4.19](https://github.com/torvalds/linux/commit/0a78ac4b9bb15b2a00dc5a5aba22b0e48834e1ad) [krbd support for `namespace`](https://github.com/torvalds/linux/commit/b26c047b940003295d3896b7f633a66aab95bebd) (needs Nautilus)
+* [Linux 4.17](https://github.com/torvalds/linux/commit/b284d4d5a6785f8cd07eda2646a95782373cd01e) [CephFS quotas](https://github.com/torvalds/linux/commit/fb18a57568c2b84cd611e242c0f6fa97b45e4907) and snapshot support (recommended)
+* [Linux 4.14](https://github.com/torvalds/linux/commit/cdb897e3279ad1677138d6bdf1cfaf1393718a08) CephFS multiple active MDS ([recommended in docs](https://docs.ceph.com/en/latest/cephfs/kernel-features/?highlight=kernel#multiple-active-metadata-servers))
+* [Linux 4.11](https://github.com/torvalds/linux/commit/b2deee2dc06db7cdf99b84346e69bdb9db9baa85) [krbd support for `data-pool` (EC storage)](https://github.com/torvalds/linux/commit/7e97332ea9caad3b7c6d86bc3b982e17eda2f736)
+* [Linux 4.9](https://github.com/torvalds/linux/commit/8dfb790b15e779232d5d4e3f0102af2bea21ca55) [krbd support for `exclusive-lock`](https://github.com/torvalds/linux/commit/ed95b21a4b0a71ef89306cdeb427d53cc9cb343f)
+* [Linux 4.8](https://github.com/torvalds/linux/commit/72b5ac54d620b29cae23d25f0405f2765b466f72) [CephFS `namespace` support](https://github.com/torvalds/linux/commit/779fe0fb8e1883d5c479ac6bd85fbd237deed1f7)
+* [Linux 4.7](https://github.com/torvalds/linux/commit/a10c38a4f385f5d7c173a263ff6bb2d36021b3bb) [CephFS multiple active filesystems](https://github.com/torvalds/linux/commit/235a09821c2bc71d9d07f12217ce2ac00db99eba)
+* [Linux 3.19](https://github.com/torvalds/linux/commit/57666509b70030a9483d13222bfec8eec5db07df) [CephFS inline data](https://github.com/torvalds/linux/commit/65a22662bfe1a84d72b9bbd9146b6782b9e53478)
+* [Linux 3.10](https://github.com/torvalds/linux/commit/91f8575685e35f3bd021286bc82d26397458f5a9) [krbd support for `striping`](https://github.com/torvalds/linux/commit/5cbf6f12c48121199cc214c93dea98cce719343b) and layering
+
+
 ## Tricks
 
 ### Performance
 
 #### Tune Huge RBD
 
-You can use LVM (or MD) to group together multiple RBDs to one device.
+You can use LVM (or MD) to group together multiple RBDs to one device. [Since Linux 5.7, krbd does per-cpu queues though, and so this method likely no longer helps](#Kernel feature list)
 
 See the configured io sizes with `lsblk --topology`. The larger, the better, as Ceph doesn't like small IO.
+
+#### RBD client local cache
+
+You can use `lvmcache` to cache a RBD on e.g. local SSD storage (which should be a md RAID or otherwise secured!).
+The cachepool size has no hard requirement, but the more the better.
+
+This is very useful for speeding up HDD-Ceph-Pools because the on-RBD filesystem commit latency is reduced drastically.
 
 
 ### Available Space
 
 * Use Erasure Coding to trade-off latency and speed with usable space.
 
-* Activate the `ceph balancer`. If it doesn't help, try my balancer: https://github.com/TheJJ/ceph-balancer
+* Activate the [`ceph balancer`](https://docs.ceph.com/en/latest/rados/operations/balancer/).
+  If it doesn't help, try my balancer: https://github.com/TheJJ/ceph-balancer
 
 
 ### Tipps
 
-* More safety: Always have `min_size` at least +1 than really required (`ceph osd pool ls detail`)
-  * Why? Every write should have at least one redundant OSD, even when you're down to `min_size`. Because if another disk dies when you're at `min_size` without a redundant OSD _everything_ is lost.
-* If health is warning, fix quickly (not just after one week) (enable auto-repair)!
+* Data safety: Always have `min_size` at least +1 more than needed for minimal reachability
+  * That means good combinations are, at least:
+    * Replica: `n>=3: size=n, min_size=2`
+    * Erasure code: `n>=2, m>=2, i>=1: EC=n+m => size=n+m, min_size=n+i`
+  * see current values in `ceph osd pool ls detail`
+  * Why? Every write should have at least one redundant OSD, even when you're down to `min_size`. Because if another disk dies when you're at `min_size` without a redundant OSD _everything_ is lost. Every write should be backed by at least one additional drive, even if you are already degraded.
+* If health is warning, fix it quickly (not just after one week) (enable auto-repair)!
 * A single dying (SATA) disk can slow down the whole cluster because of slow ops! Replace them!
   * Use SMART and `ceph osd perf` to find them (and prometheus to see read/write op latencies, and use prometheus node-exporter to see high io-loads)
   * Each operation handled by this disk will have to complete, so if it has write times of 1s, things will slow down considerably.
 * Don't set `ceph osd reweight` to values other than 0 and 1 (= `ceph osd out/in`), except when you know what you're doing.
-  * The problem is that the bucket (e.g. host) weight is unaffected by the reweight, thus probability of placing a pg on the host you just reweighted remains the same, so other OSDs in the same host will get more PGs than they would get by their size.
+  * The problem is that the bucket (e.g. host) weight is unaffected by the reweight, thus probability of placing a PG on the host on which you just reweighted a OSD remains the same, so other OSDs in the same host will get more PGs than they would get by their size.
   * A value of 0 also leads to this behavior.
   * To artificially shrink devices, use `ceph osd crush reweight` instead
-* Activate the **balancer plugin** in `mgr` or use jj's ceph balancer to optimize storage + load distribution.
+* Activate the **balancer plugin** in `mgr` or use [jj's ceph balancer](https://github.com/TheJJ/ceph-balancer) to optimize storage + load distribution.
 * When giving storage to a VM, use [`virtio-scsi`](https://wiki.gentoo.org/wiki/QEMU/Options#Hard_drive) instead of `virtio-blockdevice` and enable discard/unmapping.
