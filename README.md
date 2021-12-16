@@ -41,7 +41,9 @@ Namespace | Partition of a pool into another access realm
 Principle
 ---------
 
-All services store their data as objects, usually 4MiB size.
+The gist of how Ceph works:
+
+All services store their data as "objects", usually 4MiB size.
 A huge file or a block device is thus split up into 4MiB pieces.
 
 An object is "randomly" placed on some OSDs, depending on placement rules to ensure desired redundancy.
@@ -65,29 +67,31 @@ A ceph-client is e.g.
 
 ### Data placement
 
-Why does Ceph scale? Why is it secure™ and safe™?
+Why does Ceph **scale**? Why is it [secure™ and safe™](https://github.com/SFTtech/sticker/raw/master/sicher/sicher.pdf)?
 
-Object read/write:
-* Select a pool to operate on
-* A pool has `2^x` placement groups
-* A placement group is placed on OSDs by CRUSH, respecting the desired redundancy
-* The redundancy is e.g. "3 copies on separate servers" (3 OSDs) or "raid 6 on 12 servers" (12 OSDs)
+Cluster partitioning in pools, PGs and shards:
+* A cluster consists of pools, each can have custom redundancy and placement settings
+* A pool is partitioned in `2^x` placement groups (PG) - an object is stored in one of its pools PGs
+* The chosen pool redundancy now affects each PG e.g. "3 copies on separate servers" (3 OSDs) or "raid 6 on 12 servers" (12 OSDs)
+* Each OSD participating in serving a PG is called a PG shard. Which OSD should serve what PG shard is determined by CRUSH, respecting the desired redundancy and topology constraints
 
-To find an object in the cluster:
+To read/write an object:
+* Needed: Pool of the object, object's key ("name")
 * Hash the object's key
-* Take the last x bit of the hash
-* Use the hash bits to choose the placement group
-* Now talk to the primary OSD of this placement group to access this object
+* Take the last `x` bits of the hash and choose the placement group (that's why we have `2^x` PGs)
+* Use the CRUSH algorithm (and upmap updates) to find the primary OSD id of this placement group
+* Look in the "OSDMap" to figure out the for the IP address of the PG's primary OSD
+* Establish a connection and talk to the primary OSD of this placement group and retrieve the object data
+  * In case the pool stores data as erasure code ("RAID"), the primary OSD contacts the remaining needed OSDs in its PG for reconstructing the data
+  * When writing, the PG's primary OSD contacts all other OSDs in the same PG to let them write, and then waits until they have acknowledged, and then confirms the write to the client
 
-Since all data is chunked into (usually) 4MiB blocks, each of the blocks of big movie is on a different PG, i.e. on different OSDs, thus we talk to a different primary OSD for each block.
+Since **all data is chunked** into (usually) 4MiB blocks, each of the blocks of a file is in a different PG, i.e. on different OSDs, thus we talk to a different primary OSD for each block.
 
 -> All requests are spread accross all OSDs of the whole cluster
 
-Recovery: When the desired redundancy is no longer met (drive-, server-, rack-failure), Ceph recreates the missing data.
-
-Adding OSDs: move (backfill) some of the existing placement groups to the new OSDs so every OSD hopefully stores roughly the same amount of data.
-
-Removing OSDs: move (backfill) the placement groups existing on the to-be-removed OSDs to others that are not removed.
+* Recovery: When the desired object redundancy is no longer met (due to unavailable OSDs - drive-, server-, rack-failure), Ceph recreates the missing data automatically
+* Adding OSDs: move ("backfill") some of the existing placement groups to the new OSDs so every OSD hopefully stores roughly the same amount of data.
+* Removing OSDs: move ("backfill") the placement groups existing on the to-be-removed OSDs to others that are not removed.
 
 
 Setup
@@ -324,16 +328,25 @@ BlueStore will automatically relocate often-used data to the fast device then.
 
 With [`ceph-bluestore-tool`](https://docs.ceph.com/en/latest/man/8/ceph-bluestore-tool/), you can create, migrate expand and merge OSD block devices.
 
-* To move the block.db from an all-in-one OSD to a separate device, you need to overwrite the
-  default size of `1G` if your new `block.db` should be bigger than that (example with a new `2G` DB):
-
+* To move the block.wal from an all-in-one OSD to a new device with target full partition size:
 ```
-CEPH_ARGS="--bluestore-block-db-size 2147483648" ceph-bluestore-tool --path /var/lib/ceph/osd/ceph-42 bluefs-bdev-new-db --dev-target /dev/newfastdevice
+ceph-bluestore-tool --command bluefs-bdev-new-wal --dev-target /dev/system/osdwal$id --path /var/lib/ceph/osd/ceph-$id
 ```
 
+* The same is possible with DB (i.e. wal + most hot rocksdb data):
+```
+ceph-bluestore-tool --command bluefs-bdev-new-db --dev-target /dev/system/osdwal$id --path /var/lib/ceph/osd/ceph-$id
+```
+
+* For example, **view the sizes** of all involved BlueFS block devices:
+```
+ceph-bluestore-tool --command bluefs-stats --path /var/lib/ceph/osd/ceph-$i
+```
+
+* You can pass some arguments via env-variables if needed: `CEPH_ARGS="--bluestore-block-db-size 2147483648" ceph-bluestore-tool ...`
 * To resize a `block.db`, use `bluefs-bdev-expand` (e.g. when the underlying partition size was increased)
 * To merge separate `block.db` or `block.wal` drives onto the slow disk, use `bdev-migrate`
-* Details for the commands are in the [manpage](https://docs.ceph.com/en/latest/man/8/ceph-bluestore-tool/)
+* Details for all the commands are in the [manpage](https://docs.ceph.com/en/latest/man/8/ceph-bluestore-tool/)
 
 
 ### Metadata Setup
@@ -1357,11 +1370,11 @@ ceph.vdo=0
 lvchange --addtag $tag_to_set /dev/path-to-now-decrypted-vg
 ```
 
-## Kernel Feature List
+Kernel Feature List
+--
 
 Notable Linux kernel feature changes:
 
-Supported krbd features:
 * [Linux 5.16](https://github.com/torvalds/linux/commit/0ecca62beb12eeb13965ed602905c8bf53ac93d0) [CephFS default `async dirops`](https://github.com/torvalds/linux/commit/f7a67b463fb83a4b9b11ceaa8ec4950b8fb7f902) [(talk)](https://www.usenix.org/sites/default/files/conference/protected-files/vault20_slides_layton.pdf) (open, unlink, ... speedup) (feature available since Linux 5.7)
 * [Linux 5.7](https://github.com/torvalds/linux/commit/fcc95f06403c956e3f50ca4a82db12b66a3078e0) CephFS [`async dirops`](https://github.com/torvalds/linux/commit/a25949b99003b7e6c2604a3fc8b8d62385508477) feature (`nowsync` mount flag + Octopus needed), [rbd multi blk-mq](https://github.com/torvalds/linux/commit/f9b6b98d24f7cec5b8269217f9d4fdec1ca43218)
 * [Linux 5.3](https://github.com/torvalds/linux/commit/d9b9c893048e9d308a833619f0866f1f52778cf5) [krbd support for `object-map` and `fast-diff`](https://github.com/torvalds/linux/commit/22e8bd51bb0469d1a524130a057f894ff632376a), [selinux xattr support](https://github.com/torvalds/linux/commit/ac6713ccb5a6d13b59a2e3fda4fb049a2c4e0af2)
@@ -1377,7 +1390,8 @@ Supported krbd features:
 * [Linux 3.10](https://github.com/torvalds/linux/commit/91f8575685e35f3bd021286bc82d26397458f5a9) [krbd support for `striping`](https://github.com/torvalds/linux/commit/5cbf6f12c48121199cc214c93dea98cce719343b) and layering
 
 
-## Tricks
+Tricks
+--
 
 ### Performance
 
