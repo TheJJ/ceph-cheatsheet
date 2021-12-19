@@ -99,17 +99,18 @@ Components
 Component | Description
 ----------|------------
 Client | Something that connects to the Ceph cluster to access data.
-[Cluster](https://wiki.gentoo.org/wiki/Ceph/Cluster) | All Ceph components as a whole, providing storage
-[Object Store Device (OSD)](https://wiki.gentoo.org/wiki/Ceph/Object_Store_Device) | Actually stores data on single drive
-[Monitor (MON)](https://wiki.gentoo.org/wiki/Ceph/Monitor) | Coordinates the cluster (odd number, >=1), stores state on local disk
-[Metadata Server (MDS)](https://wiki.gentoo.org/wiki/Ceph/Metadata_Server) | Handles inode transactions, stores its state on OSDs
+[Cluster](https://docs.ceph.com/en/latest/rados/) | All Ceph components as a whole, providing storage (RADOS)
+[Object Store Device (OSD)](https://docs.ceph.com/en/latest/rados/configuration/common/#osds) | Actually stores data on single drive (key-value db)
+[Monitor (MON)](https://docs.ceph.com/en/latest/rados/configuration/common/#monitors) | Coordinates the cluster (odd number, >=1), stores state on local disk
+[Metadata Server (MDS)](https://docs.ceph.com/en/latest/cephfs/) | Handles filesystem inode transactions, stores its state on OSDs
+[Manager (MGR)](https://docs.ceph.com/en/latest/mgr/) | Collects statistics, balances, hosts webui, collects crashes, ...
 
 Thing | Description
 ------|------------
-Object | Data stored under a key, like a C++ `unordered_map` or Python `dict`
+Object | Data stored under a key (name), like a C++ `unordered_map` or Python `dict`
 Pool | Group of objects to store in the same way (redundancy, placement), access realm
-Namespace | Partition of a pool into another access realm
-[Placement Group](https://docs.ceph.com/en/latest/rados/operations/placement-groups/) | Group of objects within a pool
+Namespace | Object name prefix to create access realms
+[Placement Group](https://docs.ceph.com/en/latest/rados/operations/placement-groups/) | Partition of a pool by object key (name) hashes
 
 
 Principle
@@ -142,6 +143,9 @@ A ceph-client is e.g.
 ### Data placement
 
 Why does Ceph **scale**? Why is it [secure™ and safe™](https://github.com/SFTtech/sticker/raw/master/sicher/sicher.pdf)?
+
+Basically, data is stored on multiple OSDs, while respecting constraints.
+When OSDs fail, the missing copy is automatically recreated somewhere else.
 
 Cluster partitioning in pools, PGs and shards:
 * A cluster consists of pools, each can have custom redundancy and placement settings
@@ -271,7 +275,7 @@ ceph-mon --inject-monmap --name mon.monname /tmp/monmap
 ### Manager Setup
 [Manager config documentation](https://docs.ceph.com/en/latest/mgr/administrator/)
 
-Run one manager for each monitor.
+You should run one manager for each monitor, but having more doesn't hurt.
 Offloads work from MONs and allows scaling beyond 1000 OSDs (statistics and other unimportant stuff like disk usage)
 One MGR is active, all others are on standby.
 
@@ -281,7 +285,7 @@ sudo -u ceph mkdir -p /var/lib/ceph/mgr/ceph-$mgrid
 ceph auth get-or-create mgr.$mgrid mon 'allow profile mgr' osd 'allow *' mds 'allow *' -o /var/lib/ceph/mgr/ceph-$mgrid/keyring
 
 # test it:
-sudo -u ceph ceph-mgr -i eichhorn -d
+sudo -u ceph ceph-mgr -i $mgrid -d
 
 # actually activate it
 sudo systemctl enable --now ceph-mgr@$mgrid.service
@@ -871,12 +875,25 @@ Automatic RBD mapping with [`rbdmap.service`](https://docs.ceph.com/en/latest/ma
 $poolname/$namespacename/$imagename name=client.$username,keyring=/etc/ceph/ceph.client.$username.keyring
 ```
 
+I really recommend putting LVM on the RBD, because then you can decide to do [local caching](#) someday.
+
 In `/etc/fstab`, note the `noauto`:
 ```
-/dev/rbd/$metadata_pool_name/$imagename $mountpoint $filesystem defaults,noatime,noauto 0 0
+# either mount the rbd directly
+/dev/rbd/$metadata_pool_name/$namespacename/$imagename /your/$mountpoint $filesystem defaults,noatime,noauto 0 0
+
+# or if you used LVM
+/dev/yourvg/yourlv /your/$mountpoint $filesystem defaults,noatime,noauto 0 0
 ```
 
-(it's [a bug](http://tracker.ceph.com/issues/40247) that images are missing the namespace name in their `/dev` path).
+To actually mount when the rbd was mapped, create a mount script (don't forget to mark it *executable*):
+
+`/etc/ceph/rbd.d/$rbd_metadata_pool/$namespacename/$imagename`
+```bash
+#!/bin/bash
+
+mountpoint -q /your/mount | mount /your/mount
+```
 
 
 #### Manual mapping
@@ -1450,7 +1467,7 @@ Kernel Feature List
 Notable Linux kernel feature changes:
 
 * [Linux 5.16](https://github.com/torvalds/linux/commit/0ecca62beb12eeb13965ed602905c8bf53ac93d0) [CephFS default `async dirops`](https://github.com/torvalds/linux/commit/f7a67b463fb83a4b9b11ceaa8ec4950b8fb7f902) [(talk)](https://www.usenix.org/sites/default/files/conference/protected-files/vault20_slides_layton.pdf) (open, unlink, ... speedup) (feature available since Linux 5.7)
-* [Linux 5.7](https://github.com/torvalds/linux/commit/fcc95f06403c956e3f50ca4a82db12b66a3078e0) CephFS [`async dirops`](https://github.com/torvalds/linux/commit/a25949b99003b7e6c2604a3fc8b8d62385508477) feature (`nowsync` mount flag + Octopus needed), [rbd multi blk-mq](https://github.com/torvalds/linux/commit/f9b6b98d24f7cec5b8269217f9d4fdec1ca43218)
+* [Linux 5.7](https://github.com/torvalds/linux/commit/fcc95f06403c956e3f50ca4a82db12b66a3078e0) [krbd multi blk-mq](https://github.com/torvalds/linux/commit/f9b6b98d24f7cec5b8269217f9d4fdec1ca43218), [CephFS `async dirops`](https://github.com/torvalds/linux/commit/a25949b99003b7e6c2604a3fc8b8d62385508477) feature (`nowsync` mount flag + Octopus needed)
 * [Linux 5.3](https://github.com/torvalds/linux/commit/d9b9c893048e9d308a833619f0866f1f52778cf5) [krbd support for `object-map` and `fast-diff`](https://github.com/torvalds/linux/commit/22e8bd51bb0469d1a524130a057f894ff632376a), [selinux xattr support](https://github.com/torvalds/linux/commit/ac6713ccb5a6d13b59a2e3fda4fb049a2c4e0af2)
 * [Linux 5.1](https://github.com/torvalds/linux/commit/2b0a80b0d0bb0a3db74588279bf851b28c6c4705) [krbd support for `deep-flatten`](https://github.com/torvalds/linux/commit/b9f6d447a6f67b2acc3c4a9d9adc2508986e8df9)
 * [Linux 4.19](https://github.com/torvalds/linux/commit/0a78ac4b9bb15b2a00dc5a5aba22b0e48834e1ad) [krbd support for `namespace`](https://github.com/torvalds/linux/commit/b26c047b940003295d3896b7f633a66aab95bebd) (needs Nautilus)
