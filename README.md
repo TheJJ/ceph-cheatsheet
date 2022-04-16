@@ -1,9 +1,12 @@
 Ceph Cheatsheet
 ===============
 
-(c) 2018-2021 Jonas Jelten <jj@sft.lol>
+(c) 2018-2022 Jonas Jelten <jj@sft.lol>
 
 Released under GPLv3 or any later version.
+
+<!-- markdown-toc start -->
+**Table of Contents**
 
 - [Ceph Cheatsheet](#ceph-cheatsheet)
   - [What?](#what)
@@ -30,7 +33,7 @@ Released under GPLv3 or any later version.
       - [Placement group autoscaling](#placement-group-autoscaling)
     - [Crushmap](#crushmap)
     - [CephFS](#cephfs)
-      - [Setup](#setup-1)
+      - [CephFS Setup](#cephfs-setup)
         - [Add Users](#add-users)
           - [CephFS Quotas and Layouts](#cephfs-quotas-and-layouts)
           - [Snapshot Permissions](#snapshot-permissions)
@@ -39,15 +42,16 @@ Released under GPLv3 or any later version.
         - [Namespace](#namespace)
         - [Quota Config](#quota-config)
         - [CephFS Snapshots](#cephfs-snapshots)
-      - [Status](#status)
-      - [Tuning](#tuning)
+      - [CephFS Status](#cephfs-status)
+      - [Tuning CephFS](#tuning-cephfs)
     - [RADOS Block Devices RBD](#rados-block-devices-rbd)
       - [Kernel RBD client](#kernel-rbd-client)
-      - [More stuff](#more-stuff)
+        - [Tuning KRBD](#tuning-krbd)
+      - [Useful RBD commands](#useful-rbd-commands)
       - [Automatic mapping](#automatic-mapping)
       - [Manual mapping](#manual-mapping)
-      - [Status](#status-1)
-    - [Performance](#performance)
+      - [RBD Status](#rbd-status)
+    - [Cluster Performance](#cluster-performance)
     - [Random infos](#random-infos)
     - [Minimal client config](#minimal-client-config)
   - [Operation](#operation)
@@ -73,11 +77,12 @@ Released under GPLv3 or any later version.
     - [Decrypt OSDs](#decrypt-osds)
   - [Kernel Feature List](#kernel-feature-list)
   - [Tricks](#tricks)
-    - [Performance](#performance-1)
-      - [Tune Huge RBD](#tune-huge-rbd)
-      - [RBD client local cache](#rbd-client-local-cache)
+    - [Combine Multiple RBDs](#combine-multiple-rbds)
+    - [RBD client local cache](#rbd-client-local-cache)
     - [Available Space](#available-space)
     - [Tipps](#tipps)
+
+<!-- markdown-toc end -->
 
 
 What?
@@ -653,11 +658,16 @@ rule rulename {
 On top of RADOS, Ceph provides a [POSIX filesystem](https://docs.ceph.com/en/latest/cephfs/posix/).
 
 
-#### Setup
+#### CephFS Setup
 
 ```
 ceph fs new lolfs lol_metadata lol_root
 mount -v -t ceph -o name=lolroot,secretfile=lolfs.root.secret 10.0.18.1:6789:/ mnt/
+```
+
+newer way:
+```
+ceph fs volume create ...
 ```
 
 ##### Add Users
@@ -783,7 +793,7 @@ A client with the `s` permission for MDS can manage snapshots.
 A [snapshot](https://docs.ceph.com/en/latest/dev/cephfs-snapshots/) is created by creating a directory: `dir/to/backup/.snap/snapshot_name`.
 
 
-#### Status
+#### CephFS Status
 
 ```
 # show status overview
@@ -801,7 +811,7 @@ Show connected CephFS clients and their IPs
 ceph tell mds.$mdsid client ls
 ```
 
-#### Tuning
+#### Tuning CephFS
 
 * Enable `fast_read` on pools (see below)
 * Enable inline data: Store content for (default <4KB) in inode: `ceph fs set lolfs inline_data yes`
@@ -833,7 +843,7 @@ Now, images can be created in that pool:
 
 To map an image on a client to `/dev/rbdxxx` (using monitor addresses from `/etc/ceph/ceph.conf`):
 
-* `sudo rbd map --name client.$name -k keyring [$metadata_pool_name/[$namespacename/]]$imagename[@$snapshotname]`
+* `sudo rbd device map --name client.$name -k keyring [$metadata_pool_name/[$namespacename/]]$imagename[@$snapshotname]`
   * `-t nbd` to mount as nbd-device
   * `--namespace $namespacename` to specify the rbd namespace (as an alternative to the image "path" above)
 
@@ -855,14 +865,116 @@ rbd --pool $meta_data_pool --namespace $namespacename info $imagename
 rbd --pool $meta_data_pool --namespace $namespacename feature disable $imagename $unavailable_feature_name $anotherfeature...
 ```
 
+##### Tuning KRBD
+
+You get the most out of your RBD if you start tweaking some knobs.
+
+Generally: Your client is in control - it has to begin every request to the Ceph cluster
+- writes: writes can be parallelized easily (write-cache), even if they occur sequentially from your actual program
+- reads: reads can't be parallelized easily, since many programs just read in a sequential fashion (if they read in parallel, it works just like parallel writes)
+  - One solution is to "guess" that the program will want to read more data: configure `read_ahead`
+  - Another solution is to do **read-caching** with `lvmcache` on a client-local SSD
+- have a look at your metrics: `ceph_osd_op_r_process_latency` (and `w`), `ceph_rbd_read_latency` (and `write`), and `ceph_osd_commit_latency_ms`
+  - when sequential read ops are requested, you won't get more than `1/ceph_osd_op_r_process_latency in seconds` ops per second (say 15ms -> max 66 iops)
+  - given a HDD-pool with read-latency of 10ms average (which is very good), you'll get max 100 random read ops/s from one client.
 
 
-#### [More stuff](https://docs.ceph.com/en/latest/rbd/rados-rbd-cmds/)
+suggested `/etc/udev/rules.d/80-rbd.rules` for tweaking read and write
+```
+# parallel requests - this only works if the rbd was mapped with at least queue_depth=512!
+ACTION=="add", KERNEL=="rbd*", ATTR{queue/nr_requests}="512"
+# read up to 8 ceph objects in advance when the fs on the rbd decides for it
+ACTION=="add", KERNEL=="rbd*", ATTR{bdi/read_ahead_kb}="32768"
+```
+
+- read tuning: read ahead
+  - set the maximum amount of bytes that can be pre-read (i.e. read in parallel!)
+  - the actual number is determined on the fly e.g. by the filesystem depending on the read pattern.
+  - configurable in: `/sys/block/rbdxxx/queue/read_ahead_kb`
+    - to read up to 8 Ceph RBD objects in advance, we have to read `8 * 4096KiB = 32768 KiB`
+    - `echo 32768 > /sys/block/rbdxxx/queue/read_ahead_kb`
+  - you can't get faster than the OSDs - but `lvmcache` on SSDs and the client's page cache can help drastically with read performance
+
+
+- write tuning: IO queue optimizations
+  - once your filesystem/... is done (it merges tiny-files into bigger blocks, does journaling and metadata), somewhere the raw io requests will be submitted for the block device
+  - these requests are then placed in the block device queue, which is handled by your io scheduler (usually mq-deadline)
+  - this block device IO operation queue has a depth, configurable in `/sys/block/rbdxxx/queue/nr_requests` and is 256 by default (this number allocates slots for the block io queue). I think this is a good default. If you have lots of small IOPS, increase this to 512.
+    - [the Linux documentation](https://docs.kernel.org/admin-guide/abi-stable.html?highlight=block#abi-sys-block-disk-queue-nr-requests) says `"the total allocated number may be twice this amount, since it applies only to reads or writes"`.
+      My experiment on Linux 5.4 with mq-deadline RBD has shown `fio` with `rw direct=1 sync=0 iodepth=512` with `nr_requests=256` produces only 256 ceph ops (mixed r and w).
+      Setting `nr_requests` to 512 yields 512 ceph ops (mixed r and w)
+      Hence, `nr_requests` seems to be the total amount of pending IOPS for the `mq-deadline` Ceph RBD.
+  - in the block-io-queue, operations are selected by some algorithm (e.g. deadline) and merged with each other because they are adjacent. The resulting 'optimized' operations are then given to the block driver (rbd in our case)
+  - the RBD driver converts the IO requests to Ceph `ops`, i.e. selects which OSDs to send the ops over network
+  - the RBD has its own ceph op queue, which is allocated when the device is mapped, set by `queue_depth` (e.g. in `/etc/ceph/rbdmap` or `rbd device map your/namespaced/rbd -o queue_depth=256`.
+    It's 128 by default, but I would set it to 256 (since 256 slots are allocated for the io queue above (`nr_requests`). Use 512 if you increased `nr_requests` to 512)
+  - the RBD driver then submits the operations, you can see those in tcpdump or `/sys/kernel/debug/ceph/$fsid-$yourclientid/osdc` (get the clientid by `rbd status your/namespaced/rbd`)
+  - [since kernel 5.7](#kernel-feature-list) krbd processes the mq-deadline queue with multi-threading (i.e. picking ops from the io-queue and sending/receiving ops over network) for even more speed
+
+- `ext4` optimizations:
+  - usually your rbd objects will be 4 MiB (with 64KiB minmal allocations). so `ext4` can respect this and distribute allocations across RADOS objects if you create the fs the following way:
+    - `mkfs -E nodiscard,stride=1024,stripe_width=1024 /dev/rbd/your/rbd`
+    - why 1024? the rbd has 4096 byte blocks, i.e. `1024 * 4096 = 4MiB` = the object size
+    - it makes no sense also considering the EC sharding sizes, since all requests end up at the primary OSD of a PG anyway
+  - you can also specify the stripe width when mounting the fs (it will take `stripe_width` by default):
+    - `mount -o defaults,noauto,stripe=1024 /dev/rbd/your/rbd /your/mountpoint`
+  - to see the 'default' stripe width chosen when you don't specify it as mount option, you can inspect `dumpe2fs /dev/rbd/your/rbd` and look for `RAID stripe width`;
+
+
+Tests with `fio` on a mounted filesystem on a RBD:
+
+- make sure
+  - io scheduler's queue size is 512 (`nr_requests`)
+  - you allocated 512 RBD "hardware" queue slots (`queue_depth`)
+  - the ext4 uses 1024-block stripe size (`stripe`)
+  - open another terminal where you do `watch -n 0.5 cat osdc` to see the `osdc` contents quickly
+
+- non-cached queued writes:
+  - since we use `O_DIRECT`, Linux's write cache and io scheduler (`mq-deadline`) queue is bypassed
+  - You should see around 512 outstanding ops in the `osdc` file (limited by `nr_requests`, `queue_depth` and the fio `iodepth`)
+  - `fio --filename=/mnt/rbd-fs/file --size=20G --direct=1 --sync=0 --iodepth=512 --runtime=15 --ioengine=libaio --time_based --rw=rw --bs=64K --numjobs=1 --group_reporting --name=test`
+
+- cached queued writes
+  - we don't use `O_DIRECT` here and thus use Linux's write cache
+  - you should see much less ops in `osdc`, but a bit more performance in `fio` since the the cache and io scheduler merges all the ops
+  - in `iostat -xm 2` you can see how many ops the io scheduler merges (`wrqm`/`rrqm`)
+  - `fio --filename=/mnt/rbd-fs/file --size=20G --direct=0 --sync=0 --iodepth=1024 --runtime=15 --ioengine=libaio --time_based --rw=rw --bs=64K --numjobs=1 --group_reporting --name=test`
+
+- cached but synched writes
+  - now we make sure every single operation is synced to disk (`sync=1`), but we still use the io scheduler (`direct=0`).
+  - we allow to submit 512 operations from fio in the io scheduler queue, but we sync the `ext4` after each one, forcing the io scheduler queue to flush - thus we only allow 1 op at a time.
+  - this is really slow, since it causes `ext4` and the io scheduler to guarantee a transaction for every 64KiB write
+  - `fio --filename=/mnt/rbd-fs/file --size=20G --direct=0 --sync=1 --iodepth=1 --runtime=15 --ioengine=libaio --time_based --rw=rw --bs=64K --numjobs=1 --group_reporting --name=test`
+
+- non-cached and synched writes
+  - we now bypass the cache (`direct=1`) and submit 512 operations, and sync after each one (`sync=1`)
+  - i'm really not sure why, but we see max 512 ops at a time in `osdc` - the cache bypass seems to enable parallel synching somehow?
+  - `fio --filename=/mnt/rbd-fs/file --size=20G --direct=1 --sync=1 --iodepth=1 --runtime=15 --ioengine=libaio --time_based --rw=rw --bs=64K --numjobs=1 --group_reporting --name=test`
+
+- non-cached read test
+  - we don't use the cache and io scheduler and submit 512 read requests
+  - we will see up to 512 parallel reads in `osdc` (`sync` doesn't matter for reads)
+  - `fio --filename=/mnt/rbd-fs/file --size=20G --direct=1 --sync=0 --iodepth=512 --runtime=15 --ioengine=libaio --time_based --rw=read --bs=64K --numjobs=1 --group_reporting --name=test`
+
+- cached read test
+  - we use the io scheduler and cache and submit 512 read requests
+  - interestingly, and I can't explain this, this is much slower than with `direct=1`, and in `osdc` there's a masimum of 3 read ops only?
+  - `fio --filename=/mnt/rbd-fs/file --size=20G --direct=0 --sync=0 --iodepth=512 --runtime=15 --ioengine=libaio --time_based --rw=read --bs=64K --numjobs=1 --group_reporting --name=test`
+
+- you can also use `--rw=randrw`/`randread` for random access, since `--rw=rw` tests sequentially
+
+
+#### Useful RBD commands
+
+https://docs.ceph.com/en/latest/rbd/rados-rbd-cmds/
 
 * When you have a fresh rbd device, use `mkfs.ext4 -E nodiscard` to skip the discard step
-* List images: `rbd ls $meta_pool_name`
-* Show info: `rbd info $pool/$image`
-* Show pending deleted images: `rbd trash ls`, optionally append the pool name
+* List namespaces of pool: `rbd namespace ls $pool`
+* List images in namespace: `rbd ls $pool/$namespace`
+* List images without namespace: `rbd ls $pool`
+* Show info: `rbd info $pool/$namespace/$image`
+* Show clients (IP, id) who have mapped the RBD: `rbd status $pool/$namespace/$image`
+* Show pending deleted images: `rbd trash ls [$pool]`
 * Size increase: `rbd resize --size 9001T $pool/$img`
 * Size decrease: `rbd resize --size 20M $pool/$img --allow-shrink`
 
@@ -875,37 +987,45 @@ Automatic RBD mapping with [`rbdmap.service`](https://docs.ceph.com/en/latest/ma
 $poolname/$namespacename/$imagename name=client.$username,keyring=/etc/ceph/ceph.client.$username.keyring
 ```
 
-I really recommend putting LVM on the RBD, because then you can decide to do [local caching](#) someday.
+I really recommend putting LVM on the RBD, because then you can decide to do [local caching with `lvmcache`](#) someday.
 
-In `/etc/fstab`, note the `noauto`:
+In `/etc/fstab`, note the `noauto` - we need it because the `rbdmap` tool and not `systemd` shall mount the filesystem.
+When you use `ext4`, add option `stripe=1024` ([see above for explaination](#tuning-krbd)).
+
+- either mount the RBD directly
 ```
-# either mount the rbd directly
 /dev/rbd/$metadata_pool_name/$namespacename/$imagename /your/$mountpoint $filesystem defaults,noatime,noauto 0 0
+```
 
-# or if you used LVM
+- or if you used LVM
+```
 /dev/yourvg/yourlv /your/$mountpoint $filesystem defaults,noatime,noauto 0 0
 ```
 
-To actually mount when the rbd was mapped, create a mount script (don't forget to mark it *executable*):
+These entries (due to the `noauto`) won't mount at boot.
+This is good, since the RBD is not mapped at that point anyway.
+
+
+To actually mount when the RBD was mapped with `rbdmap.service`, create a mount script (don't forget to mark it *executable*):
 
 `/etc/ceph/rbd.d/$rbd_metadata_pool/$namespacename/$imagename`
 ```bash
 #!/bin/bash
 
-mountpoint -q /your/mount | mount /your/mount
+mountpoint -q /your/mount || mount /your/mount
 ```
 
 
 #### Manual mapping
 
-Instead of `rbdmap.service` we can directly use sysfs to map:
+Instead of `rbdmap.service` we can directly use `sysfs` to map:
 
 ```
-echo $ceph_monitor_ip name=$username,secret=$secret $pool $image > /sys/bus/rbd/add
+echo $ceph_monitor_ip name=$username,secret=$secret,queue_depth=512 $pool $image > /sys/bus/rbd/add
 ```
 
 
-#### Status
+#### RBD Status
 
 Show connected RBD clients and their IPs
 ```
@@ -913,7 +1033,7 @@ rbd status $pool/$namespace/$image
 ```
 
 
-### Performance
+### Cluster Performance
 
 Each OSD should serve **50 to 150 placement groups in total** (see with `ceph osd df tree`).
 
@@ -926,7 +1046,9 @@ debug ms = 0/0
 ```
 
 To speed up [pool reads](https://docs.ceph.com/en/latest/rados/operations/pools/#fast-read), the primary OSD queries **all** shards (not only the non-parity ones) of the data, and take the fastest reply.
-This is useful for reading small files with CephFS, but of course is a tradeoff for more network traffic and iops from OSDs.
+This is useful for reading small files with CephFS, but of course is a trade-off for more network traffic and iops from OSDs.
+Since all your disks now reply to read requests - you have to benchmark and try if it helps in your current situation:
+Only if disks have more IO capacity, but their latency is quite high, `fast_read` will help.
 ```
 ceph osd pool set cephfs_data_pool fast_read 1
 ```
@@ -1199,6 +1321,7 @@ When `ceph-iops` results are shown, look at `write: IOPS=XXXXX`.
 * HDDs should have >100 iops
 * Bad SSDs have <200 iops => >5ms latency
 
+
 #### OSD speed
 
 Before taking an OSD `in`, check its speed! Otherwise it can slow down your whole cluster.
@@ -1225,6 +1348,8 @@ Use `rados bench`!
 
 #### RBD speed
 
+see [KRBD tuning](#tuning-krbd).
+
 ```
 rbd bench --io-type rw $poolname/$imagename
 # other io types: read, write, rw
@@ -1249,7 +1374,7 @@ The PG autoscaler can increase or decrease the number of PGs.
 
 Modes: `on`, `warn`, `off`
 
-I strongly _recommend against_ `on`: I had a funny outage because too many PGs were created and the OSDs then rejected them (solution: increase `mon_max_pg_per_osd`)
+I strongly _recommend against_ `on`: I had a funny outage because too many PGs were created and the OSDs then rejected them (solution: increase `mon_max_pg_per_osd`, see [PGs not starting](#pgs-not-starting)).
 
 Default policy for new pools:
 ```
@@ -1453,7 +1578,7 @@ ceph.cluster_fsid=cluster_fs_id
 ceph.cluster_name=ceph
 ceph.crush_device_class=None
 ceph.encrypted=0                                    # indicates the device is not crypted
-ceph.osd_fsid=asdfasdf-asdfasdf-asdf-asdf-asdf      # get from crypted device tags
+ceph.osd_fsid=stufstuf-stufstuf-stuf-stuf-stuf      # get from crypted device tags
 ceph.osd_id=$correctosdid
 ceph.type=block
 ceph.vdo=0
@@ -1481,23 +1606,24 @@ Notable Linux kernel feature changes:
 * [Linux 3.10](https://github.com/torvalds/linux/commit/91f8575685e35f3bd021286bc82d26397458f5a9) [krbd support for `striping`](https://github.com/torvalds/linux/commit/5cbf6f12c48121199cc214c93dea98cce719343b) and layering
 
 
+
 Tricks
 --
 
-### Performance
+### Combine Multiple RBDs
 
-#### Tune Huge RBD
-
-You can use LVM (or MD) to group together multiple RBDs to one device. [Since Linux 5.7, krbd does per-cpu queues though, and so this method likely no longer helps](#Kernel feature list)
+Apart from general [KRBD tuning](#tuning-krbd), you can group together multiple RBDs.
+You can use LVM (or MD) to bundle multiple RBDs to one device. But [Since Linux 5.7, krbd does per-cpu queue processing so this method likely no longer helps](#Kernel feature list).
 
 See the configured io sizes with `lsblk --topology`. The larger, the better, as Ceph doesn't like small IO.
 
-#### RBD client local cache
+### RBD client local cache
 
 You can use `lvmcache` to cache a RBD on e.g. local SSD storage (which should be a md RAID or otherwise secured!).
 The cachepool size has no hard requirement, but the more the better.
 
-This is very useful for speeding up HDD-Ceph-Pools because the on-RBD filesystem commit latency is reduced drastically.
+This is very useful for speeding up HDD-Ceph-Pools because the on-RBD filesystem commit latency is reduced drastically,
+but especially read performance can benefit when data is cached and there's no need to fetch it while waiting ~15ms.
 
 
 ### Available Space
