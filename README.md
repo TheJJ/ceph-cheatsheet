@@ -472,7 +472,7 @@ For ideal balancing, the shard sizes of all pools should be equal!
 
 
 ```
-ceph tell 'mds.*' injectargs -- --debug_mgr=4/5    # for: `tail -f ceph-mgr.*.log | grep balancer`
+ceph tell 'mgr.*' injectargs -- --debug_mgr=4/5    # for: `tail -f ceph-mgr.*.log | grep balancer`
 ceph balancer status
 ceph balancer mode upmap         # upmap items as movement method, not reweighting.
 ceph balancer eval               # evaluate current score
@@ -816,6 +816,13 @@ ceph tell mds.$mdsid client ls
 * Enable `fast_read` on pools (see below)
 * Enable inline data: Store content for (default <4KB) in inode: `ceph fs set lolfs inline_data yes`
 
+#### MDS Slow ops
+```
+mds.mds1 [WRN] slow request 30.633018 seconds old, received at 2020-09-12 17:38:03.970677: client_request(client.148012229:9530909 getattr AsLsXsFs #0x100531c49cf
+                caller_uid=3860, caller_gid=3860{}) currently failed to rdlock, waiting
+
+rados -p $cephfs-data-pool getxattr 100531c49cf.00000000 parent | ceph-dencoder type inode_backtrace_t import - decode dump_json
+```
 
 ### RADOS Block Devices RBD
 
@@ -977,6 +984,11 @@ https://docs.ceph.com/en/latest/rbd/rados-rbd-cmds/
 * Show pending deleted images: `rbd trash ls [$pool]`
 * Size increase: `rbd resize --size 9001T $pool/$img`
 * Size decrease: `rbd resize --size 20M $pool/$img --allow-shrink`
+* QoS on RBD pool, restrict to 1000 ops: `rbd config pool set $pool rbd_qos_iops_limit 1000`
+* Remove QoS on RBD: `rbd config pool rm $pool rbd_qos_iops_limit`
+* QoS on RBD image, restrict to 1000 ops: `rbd config image set $pool/$img rbd_qos_iops_limit 1000`
+* Remove QoS on RBD images: `rbd config image rm $pool/$img rbd_qos_iops_limit`
+* Show performance of RBD pool images: `rbd perf image iotop --pool $pool`
 
 
 #### Automatic mapping
@@ -1123,6 +1135,9 @@ https://docs.ceph.com/en/latest/rados/operations/monitoring-osd-pg/
 ceph df
 ceph df detail
 
+# Before Ceph warns about Pools being nearfull
+ceph osd dump | grep nearfull_ratio
+
 # pool usage
 rados df
 ceph osd pool stats
@@ -1130,6 +1145,7 @@ ceph osd pool stats
 # osd usage
 ceph osd tree
 ceph osd df tree
+ceph osd df tree name $bucket
 
 # osd commit latency performance
 ceph osd perf
@@ -1145,6 +1161,9 @@ ceph pg ls-by-osd $osdid
 
 # list all pgs where the primary is the given osd
 ceph pg ls-by-primary $osdid
+
+# What PGs are remapped?
+ceph pg ls remapped
 ```
 
 ### Daemon control and info
@@ -1184,6 +1203,13 @@ ceph daemon $daemontype.$id config diff|get|set|show
 # can also be done with dashboard under "Cluster" -> "Configuration Doc."
 ceph tell 'osd.*' injectargs -- --debug_ms=0 --osd_deep_scrub_interval=5356800
 ceph tell 'mon.*' injectargs -- --debug_ms=0
+
+# This can be done on modern clusters with ceph config set
+# ceph central configs
+ceph config dump
+
+# set OSD 0 in debug mode
+ceph config set osd.0 debug_osd 20/20
 ```
 
 ```
