@@ -1660,7 +1660,7 @@ but especially read performance can benefit when data is cached and there's no n
   If it doesn't help, try my balancer: https://github.com/TheJJ/ceph-balancer
 
 
-### Tipps
+### Tips
 
 * Data safety: Always have `min_size` at least +1 more than needed for minimal reachability
   * That means good combinations are, at least:
