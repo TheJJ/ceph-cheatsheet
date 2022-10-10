@@ -1480,6 +1480,15 @@ ceph tell 'osd.*' injectargs -- --osd_recovery_sleep_hdd=0
 
 https://docs.ceph.com/en/latest/rados/troubleshooting/troubleshooting-pg/
 
+When a pg is `inconsistent`, object data did not match the recorded checksum during deep scrub.
+This may be because the drive is defect, bitrot occured, or some bug in the whole IO path.
+
+```
+rados list-inconsistent-pg $poolname
+rados list-inconsistent-obj $pgid
+rados list-inconsistent-snapset $pgid
+```
+
 ```
 # check for pg status
 ceph pg $pgid query | jq -C . | less
@@ -1490,6 +1499,10 @@ To start repair when health is `PG_DAMAGED`, do:
 ceph health detail
 ceph pg repair $pgid  # e.g. 1.2b, from the health detail
 ```
+
+If this doesn't work, try restarting the primary OSD of this PG.
+Otherwise, have a look at the primary OSD log file and dig deeper...
+
 
 To enable automatic repair of placement groups, set config option:
 ```
@@ -1523,7 +1536,7 @@ debug osd = 5/20
 ```
 
 When PGs are corrupted (so they prevent an OSD boot), remove the broken ones from an OSD.
-There's [a script](https://gist.github.com/TheJJ/c6be62e612ac4782bd0aa279d8c82197) for automatic fixing for selected breakages.
+There's [a script](https://gist.github.com/TheJJ/c6be62e612ac4782bd0aa279d8c82197) for automatic fixing for some breakages.
 
 
 ```
@@ -1545,7 +1558,8 @@ ceph-kvstore-tool <rocksdb|bluestore-kv> /var/lib/ceph/osd/ceph-$id compact
 
 #### Incomplete PGs
 
-[`incomplete`](https://docs.ceph.com/en/latest/rados/operations/pg-states/) PG state means Ceph is afraid of starting the PG.
+[`incomplete`](https://docs.ceph.com/en/latest/rados/operations/pg-states/) PG state means Ceph is afraid of starting the PG because the "states" are out of sync.
+First, try to restart the primary OSD of the `incomplete` PGs.
 
 If the `ceph pg $pgid query` for a `incomplete` pg says `les_bound` blocked, the following might help.
 
