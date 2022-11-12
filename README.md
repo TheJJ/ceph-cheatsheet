@@ -23,7 +23,9 @@ Released under GPLv3 or any later version.
       - [Crash dump collection](#crash-dump-collection)
     - [Storage](#storage)
       - [Add BlueStore OSD](#add-bluestore-osd)
+        - [Automatic Discovery and Startup](#automatic-discovery-and-startup)
         - [Adding many OSDs at once](#adding-many-osds-at-once)
+        - [Reformat an OSD](#reformat-an-osd)
       - [Separate OSD Database and Bulk Storage](#separate-osd-database-and-bulk-storage)
         - [Migrate of OSD journal and database](#migrate-of-osd-journal-and-database)
     - [Metadata Setup](#metadata-setup)
@@ -376,6 +378,19 @@ The **secret hdd keys** for `--dmcrypt` are stored in the `config-key` database 
 ```
 ceph config-key dump | grep dm-crypt
 ```
+
+##### Automatic Discovery and Startup
+
+`ceph-volume` can enumerate all attached disks and start up the OSDs.
+This will create the `systemd` service files for starting the OSDs at the next boot, too.
+
+```
+sudo ceph-volume lvm activate --all
+```
+
+This allows your OSD hosts to be completely stateless!
+You can even boot your OSD system over network with PXE that way, and just start all the OSDs system-independently.
+
 
 ##### Adding many OSDs at once
 
