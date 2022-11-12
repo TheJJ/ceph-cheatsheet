@@ -402,6 +402,31 @@ You can even boot your OSD system over network with PXE that way, and just start
   * now the cluster fills up the new OSDs
 * Everything's done once cluster is on `HEALTH_OK` again
 
+##### Reformat an OSD
+
+In case a OSD is corrupted somehow, and you want to re-initialize it's on-disk data structures (i.e. delete everything),
+you can wipe the blockdevice and create a new BlueStore FS.
+
+This keeps all the `ceph-volum` and encryption things in-place, and just resets the OSD itself.
+
+```
+# observe and decide that OSD $osdid needs an reset
+
+# go to the osd directory
+cd /var/lib/ceph/osd/ceph-$osdid
+
+# clear the bluestore header
+dd if=/dev/zero of=./block count=1 bs=100MB
+
+# create a new bluestore filesystem
+sudo ceph-osd -f --id $osdid --setuser ceph --setgroup ceph --mkfs
+
+# start the service again
+sudo systemctl start ceph-osd@$osdid.service
+```
+
+Now the OSD is fresh and clean and rejoins the cluster.
+
 
 #### Separate OSD Database and Bulk Storage
 
