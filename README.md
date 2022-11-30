@@ -22,6 +22,7 @@ Released under GPLv3 or any later version.
     - [Manager Setup](#manager-setup)
       - [Crash dump collection](#crash-dump-collection)
     - [Storage](#storage)
+      - [OSD Memory Amount](#osd-memory-amount)
       - [Add BlueStore OSD](#add-bluestore-osd)
         - [Automatic Discovery and Startup](#automatic-discovery-and-startup)
         - [Adding many OSDs at once](#adding-many-osds-at-once)
@@ -46,14 +47,20 @@ Released under GPLv3 or any later version.
         - [CephFS Snapshots](#cephfs-snapshots)
       - [CephFS Status](#cephfs-status)
       - [Tuning CephFS](#tuning-cephfs)
+      - [MDS Slow ops](#mds-slow-ops)
     - [RADOS Block Devices RBD](#rados-block-devices-rbd)
       - [Kernel RBD client](#kernel-rbd-client)
         - [Tuning KRBD](#tuning-krbd)
       - [Useful RBD commands](#useful-rbd-commands)
       - [Automatic mapping](#automatic-mapping)
       - [Manual mapping](#manual-mapping)
+      - [LVM on RBD](#lvm-on-rbd)
       - [RBD Status](#rbd-status)
     - [Cluster Performance](#cluster-performance)
+      - [Messenger logging](#messenger-logging)
+      - [Fast Pool reads](#fast-pool-reads)
+      - [Recovery Speed](#recovery-speed)
+      - [Crush parameter tuning](#crush-parameter-tuning)
     - [Random infos](#random-infos)
     - [Minimal client config](#minimal-client-config)
   - [Operation](#operation)
@@ -334,14 +341,46 @@ Details: `ceph crash`
 
 ### Storage
 
-[How to add devices](https://docs.ceph.com/en/latest/ceph-volume/lvm/prepare/).
+[How to add devices](https://docs.ceph.com/en/latest/ceph-volume/lvm/prepare).
 
 Before adding OSDs, you can do `ceph osd set noin` so new disks are not filled automatically.
 Once you want it to be filled, do `ceph osd in $osdid`.
 
+
+#### OSD Memory Amount
+
+Ceph since v15 supports global cluster configuration, so you don't need to mess with distributing a `ceph.conf` any more.
+
+To configure the amount of memory each OSD should occupy (in total: workmem + rest for cache):
+```
+ceph config set osd osd_memory_target $size_in_byte
+```
+
+- `1073741824 = 1GiB` etc.
+- I'd recommend `2GiB` or if you can spare it `4GiB`.
+  `1GiB` works pretty ok, though.
+- The rest of the RAM will be used by the Linux-cache anyway
+
+Configure the per-osd memory differently by some host name:
+```
+ceph config set osd/host:yourspecialcheapserver osd_memory_target $size_in_byte
+```
+
+This can also be set in the `ceph.conf` to test without updating the cluster config:
+```
+[osd]
+osd_memory_target = 4294967296   # 4GiB
+```
+
+Or set it non-permanently at runtime (use `osd.somenumber` to target just one OSD instead of all):
+```
+ceph tell 'osd.*' injectargs '--osd_memory_target=2147483648'
+```
+
+
 #### Add BlueStore OSD
 
-Add a [BlueStore](https://docs.ceph.com/en/latest/rados/configuration/bluestore-config-ref/) device, with the help of LVM. In the LVM tags, metainfo is stored.
+Add a [BlueStore](https://docs.ceph.com/en/latest/rados/configuration/bluestore-config-ref) device, with the help of LVM. In the LVM tags, metainfo is stored.
 
 The data and journal (WAL) and keyvalue-DB can be placed on different devices (HDD and SSD).
 
@@ -1076,6 +1115,17 @@ Instead of `rbdmap.service` we can directly use `sysfs` to map:
 echo $ceph_monitor_ip name=$username,secret=$secret,queue_depth=512 $pool $image > /sys/bus/rbd/add
 ```
 
+#### LVM on RBD
+
+If you want to create a `lvm` `pv` directly on the rbd, you may need to add its device type in `/etc/lvm/lvm.conf`:
+
+```
+types=["rbd", 255]
+```
+
+If you did not configure the above, `pvcreate` will complain `Device /dev/rbd... excluded by a filter.`
+If the `pv` is already on the RBD, `pvscan` just doesn't find anything.
+
 
 #### RBD Status
 
@@ -1089,6 +1139,7 @@ rbd status $pool/$namespace/$image
 
 Each OSD should serve **50 to 150 placement groups in total** (see with `ceph osd df tree`).
 
+#### Messenger logging
 
 `debug_ms` is the messenger log (which logs every damn network message to ram by default).
 Set it to 0 in your `ceph.conf`:
@@ -1097,6 +1148,8 @@ Set it to 0 in your `ceph.conf`:
 debug ms = 0/0
 ```
 
+#### Fast Pool reads
+
 To speed up [pool reads](https://docs.ceph.com/en/latest/rados/operations/pools/#fast-read), the primary OSD queries **all** shards (not only the non-parity ones) of the data, and take the fastest reply.
 This is useful for reading small files with CephFS, but of course is a trade-off for more network traffic and iops from OSDs.
 Since all your disks now reply to read requests - you have to benchmark and try if it helps in your current situation:
@@ -1104,6 +1157,11 @@ Only if disks have more IO capacity, but their latency is quite high, `fast_read
 ```
 ceph osd pool set cephfs_data_pool fast_read 1
 ```
+
+If you experience quite slow read operations, try disabling fast_read, since that reduces the read io load quite significantly!
+
+
+#### Recovery Speed
 
 Faster recovery speed:
 ```
@@ -1115,6 +1173,7 @@ osd max backfills = 16
 osd recovery delay start = 30
 ```
 
+#### Crush parameter tuning
 
 Get current crush tunables profile:
 ```
@@ -1124,12 +1183,6 @@ ceph osd crush show-tunables
 Set it to `optimal`:
 ```
 ceph osd crush tunables optimal
-```
-
-Set the amount of memory one OSD should occupy. It will adjust its cache sizes automatically.
-```
-[osd]
-osd_memory_target = 4294967296   # 4GiB
 ```
 
 
