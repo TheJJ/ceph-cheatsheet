@@ -29,7 +29,7 @@ Released under GPLv3 or any later version.
         - [Reformat an OSD](#reformat-an-osd)
       - [Separate OSD Database and Bulk Storage](#separate-osd-database-and-bulk-storage)
         - [Migrate of OSD journal and database](#migrate-of-osd-journal-and-database)
-    - [Metadata Setup](#metadata-setup)
+    - [Metadata Server](#metadata-server)
     - [Balancer](#balancer)
     - [Erasure Coding](#erasure-coding)
     - [Pools](#pools)
@@ -46,6 +46,7 @@ Released under GPLv3 or any later version.
         - [Quota Config](#quota-config)
         - [CephFS Snapshots](#cephfs-snapshots)
       - [CephFS Status](#cephfs-status)
+    - [MDS Online Scrub](#mds-online-scrub)
       - [Tuning CephFS](#tuning-cephfs)
       - [MDS Slow ops](#mds-slow-ops)
     - [RADOS Block Devices RBD](#rados-block-devices-rbd)
@@ -78,7 +79,6 @@ Released under GPLv3 or any later version.
     - [PG Autoscale](#pg-autoscale)
     - [PGs not starting](#pgs-not-starting)
       - [Stuck after adding new OSDs](#stuck-after-adding-new-osds)
-    - [MDS](#mds)
     - [Recovery](#recovery)
     - [Data Corruption](#data-corruption)
       - [OSD crashes](#osd-crashes)
@@ -359,14 +359,20 @@ ceph config set osd osd_memory_target $size_in_byte
 - `1073741824 = 1GiB` etc.
 - I'd recommend `2GiB` or if you can spare it `4GiB`.
   `1GiB` works pretty ok, though.
-- The rest of the RAM will be used by the Linux-cache anyway
+- The rest of the RAM will be used by the Linux block cache anyway
 
-Configure the per-osd memory differently by some host name:
+Configure the per-osd memory differently by masking the config to a host name:
 ```
-ceph config set osd/host:yourspecialcheapserver osd_memory_target $size_in_byte
+ceph config set osd/host:yourspecialcheapservername osd_memory_target $size_in_byte
 ```
 
-This can also be set in the `ceph.conf` to test without updating the cluster config:
+To disable automatic resizing of the OSD memory:
+```
+ceph config set osd/host:yourspecialcheapservername bluestore_cache_autotune false
+# set the cache size with:  bluestore_cache_size, bluestore_cache_size_hdd, bluestore_cache_size_ssd
+```
+
+This can also be set in a host's `ceph.conf` to test without updating the cluster config:
 ```
 [osd]
 osd_memory_target = 4294967296   # 4GiB
@@ -511,7 +517,7 @@ ceph-bluestore-tool --command bluefs-stats --path /var/lib/ceph/osd/ceph-$i
 * Details for all the commands are in the [manpage](https://docs.ceph.com/en/latest/man/8/ceph-bluestore-tool/)
 
 
-### Metadata Setup
+### Metadata Server
 
 Metadata servers (MDS) are needed for the CephFS.
 
@@ -888,6 +894,20 @@ ceph fs get lolfs
 Show connected CephFS clients and their IPs
 ```
 ceph tell mds.$mdsid client ls
+```
+
+
+### MDS Online Scrub
+
+```
+# flush journal
+ceph daemon mds.$id flush journal
+
+# online scrub
+ceph daemon mds.$id scrub_path /path/on/fs recursive
+
+# tell ceph that mds $0 has been repaired
+ceph mds repaired $cephfs_name:0
 ```
 
 #### Tuning CephFS
@@ -1537,21 +1557,6 @@ If this doesn't fix it, try to repeer primary OSDs of stuck pgs.
 Afterwards, make sure to reduce the number of PGs!
 
 
-### MDS
-
-Online scrub:
-
-```
-# flush journal
-ceph daemon mds.$id flush journal
-
-# online scrub
-ceph daemon mds.$id scrub_path /path/on/fs recursive
-
-# tell ceph that mds $0 has been repaired
-ceph mds repaired $cephfs_name:0
-```
-
 ### Recovery
 
 Data movement/recreation can be done as `backfill` or `recovery`.
@@ -1673,6 +1678,8 @@ Then, to tell Ceph to just use what's there:
 
 ```
 # JUST FOR RECOVERY set for the right OSD (or inject the arg)
+# les = log entry sequence
+# this allows pg.last_epoch_started > current activation_epoch
 [osd.1337]
 osd find best info ignore history les = true
 ```
