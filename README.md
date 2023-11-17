@@ -647,14 +647,14 @@ ceph osd pool ls detail --format json | jq -C .
 
 ### Pools
 
-```
-## For CephFS:
+To run CephFS on an erasure coded (ec) pool, we need `allow_ec_overrides`.
 
-# erasure coding pool
+```
+# erasure coding pool (for data)
 ceph osd pool create lol_data 32 32 erasure standard_8_2
 ceph osd pool set lol_data allow_ec_overwrites true
 
-# replicated pools
+# replicated pools (for metadata)
 ceph osd pool create lol_root 32 replicated
 ceph osd pool create lol_metadata 32 replicated
 
@@ -663,14 +663,19 @@ ceph osd pool set lol_root size 3
 ceph osd pool set lol_root min_size 2
 ceph osd pool set lol_metadata size 3
 ceph osd pool set lol_metadata min_size 2
+
+# for lol_data the size and min_size are determined by the ec profile
 ```
 
+In a CephFS volume, you can have multiple storage pools "mounted" at any directory.
 ```
-# in the same CephFS, there can be multiple storage policies
 # for example, this 8+3 pool can be to store some directories 'more safe'
 ceph osd erasure-code-profile set backup_8_3 k=8 m=3 crush-failure-domain=osd
 ceph osd pool create lol_backup 64 64 erasure backup_8_3
 ceph osd pool set lol_backup allow_ec_overwrites true
+
+# in the cephfs, assign it to a directory and all its _new_ content:
+setfattr -n ceph.dir.layout.pool -v lol_backup your-backup-directory-name
 ```
 
 Pool quotas
