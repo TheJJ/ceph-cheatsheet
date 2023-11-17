@@ -21,7 +21,7 @@ Released under GPLv3 or any later version.
       - [Monmap](#monmap)
     - [Manager Setup](#manager-setup)
       - [Crash dump collection](#crash-dump-collection)
-    - [Storage](#storage)
+    - [Object Storage Devices](#object-storage-devices)
       - [OSD Memory Amount](#osd-memory-amount)
       - [Add BlueStore OSD](#add-bluestore-osd)
         - [Automatic Discovery and Startup](#automatic-discovery-and-startup)
@@ -31,6 +31,9 @@ Released under GPLv3 or any later version.
         - [Migrate of OSD journal and database](#migrate-of-osd-journal-and-database)
     - [Metadata Server](#metadata-server)
     - [Balancer](#balancer)
+      - [Shard sizes](#shard-sizes)
+      - [JJ's Ceph Balancer](#jjs-ceph-balancer)
+      - [Ceph's built-in Balancer](#cephs-built-in-balancer)
     - [Erasure Coding](#erasure-coding)
     - [Pools](#pools)
       - [Placement group autoscaling](#placement-group-autoscaling)
@@ -85,6 +88,8 @@ Released under GPLv3 or any later version.
       - [Incomplete PGs](#incomplete-pgs)
     - [Decrypt OSDs](#decrypt-osds)
   - [Kernel Feature List](#kernel-feature-list)
+  - [Large Clusters](#large-clusters)
+    - [OSDMap Cache](#osdmap-cache)
   - [Tricks](#tricks)
     - [Combine Multiple RBDs](#combine-multiple-rbds)
     - [RBD client local cache](#rbd-client-local-cache)
@@ -339,7 +344,7 @@ New crashes appear in `ceph status`.
 Details: `ceph crash`
 
 
-### Storage
+### Object Storage Devices
 
 [How to add devices](https://docs.ceph.com/en/latest/ceph-volume/lvm/prepare).
 
@@ -542,9 +547,25 @@ ceph fs set $fsname allow_standby_replay <true|false>
 
 This is super-important to use when you have different-sized OSDs!
 
-Also, make sure for right balancing that big pools have enough PGs, otherwise each shard of the PG is very big already.
-If there's too less PGs for a larger pool, the PGs are balanced correctly, but **one** might already fill up a OSD by 200G.
+Basically we improve the placement of PGs on top of the CRUSH algorithm's distribution.
 
+It distributes PGs on OSDs such that available space is maximized and/or load is evenly distributed
+
+Also, make sure for right balancing that big pools have enough PGs, otherwise each shard ("piece") of the PG is very big already.
+
+I recommend a **PG shard** should be around 10-50 GiB.
+When balancing, this is the amount that can be moved from one OSD to another.
+
+#### Shard sizes
+
+To see the shard size of your pools, use:
+
+``` bash
+# github.com/TheJJ/ceph-balancer
+./placementoptimizer.py show
+```
+
+Or calculate it by hand:
 ```
 # shard size calculation
 if pool is replica:
@@ -553,11 +574,32 @@ elif pool is erasurecoded(n+m):
     shardsize = pool_size / (pg_num * n)
 ```
 
-For ideal balancing, the shard sizes of all pools should be equal!
 
+#### JJ's Ceph Balancer
+
+I recommend using my own balancer: https://github.com/TheJJ/ceph-balancer
+It's scientifically approved™ and yields great® results :)
+
+``` bash
+# generate 100 balancing movements
+./placementoptimizer.py -v balance -m 100 > /tmp/balance-instructions
+# after you are happy with the results:
+bash /tmp/balance-instructions
+# repeat (and/or generate more at once) if you want :)
+```
+
+If this works for you, please send a mail to jj -at- sft.lol so I can collect samples and improve the algorithm even more.
+
+#### Ceph's built-in Balancer
+
+Ceph also has a built-in balancer which can also produce good results, it just considers even PG distribution (by id), but it does not respect device fill levels or pool/shard sizes.
 
 ```
-ceph tell 'mgr.*' injectargs -- --debug_mgr=4/5    # for: `tail -f ceph-mgr.*.log | grep balancer`
+# to see what the mgr is doing internally with
+# tail -f ceph-mgr.*.log | grep balancer
+ceph tell 'mgr.*' injectargs -- --debug_mgr=4/5
+
+# balancer commands:
 ceph balancer status
 ceph balancer mode upmap         # upmap items as movement method, not reweighting.
 ceph balancer eval               # evaluate current score
@@ -583,6 +625,7 @@ To further optimize placement and really adjust the equal PG-count to be within 
 ```
 ceph config set mgr mgr/balancer/upmap_max_deviation 1
 ```
+
 
 ### Erasure Coding
 
@@ -1747,8 +1790,26 @@ Notable Linux kernel feature changes:
 
 
 
-Tricks
---
+## Large Clusters
+
+### OSDMap Cache
+
+`ceph-osd` caches 500 previous osdmaps by default.
+For ~7000 OSDs an osdmap is ~4MiB -> waste 2GiB of RAM per OSD!
+
+So you can reduce the map cache size:
+```
+[global]
+osd map message max = 10
+[osd]
+osd map cache size = 20
+osd map max advance = 10
+osd map share max epochs = 10
+osd pg epoch persisted max stale = 10
+```
+
+
+## Tricks
 
 ### Combine Multiple RBDs
 
@@ -1771,7 +1832,7 @@ but especially read performance can benefit when data is cached and there's no n
 * Use Erasure Coding to trade-off latency and speed with usable space.
 
 * Activate the [`ceph balancer`](https://docs.ceph.com/en/latest/rados/operations/balancer/).
-  If it doesn't help, try my balancer: https://github.com/TheJJ/ceph-balancer
+  You can gain more space for free if you use my balancer: https://github.com/TheJJ/ceph-balancer
 
 
 ### Tips
@@ -1790,5 +1851,4 @@ but especially read performance can benefit when data is cached and there's no n
   * The problem is that the bucket (e.g. host) weight is unaffected by the reweight, thus probability of placing a PG on the host on which you just reweighted a OSD remains the same, so other OSDs in the same host will get more PGs than they would get by their size.
   * A value of 0 also leads to this behavior.
   * To artificially shrink devices, use `ceph osd crush reweight` instead
-* Activate the **balancer plugin** in `mgr` or use [jj's ceph balancer](https://github.com/TheJJ/ceph-balancer) to optimize storage + load distribution.
 * When giving storage to a VM, use [`virtio-scsi`](https://wiki.gentoo.org/wiki/QEMU/Options#Hard_drive) instead of `virtio-blockdevice` and enable discard/unmapping.
