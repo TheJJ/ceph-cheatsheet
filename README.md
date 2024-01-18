@@ -1,7 +1,7 @@
 Ceph Cheatsheet
 ===============
 
-(c) 2018-2023 Jonas Jelten <jj@sft.lol>
+(c) 2018-2024 Jonas Jelten <jj@sft.lol>
 
 Released under GPLv3 or any later version.
 
@@ -786,6 +786,14 @@ rule rulename {
 }
 ```
 
+To test where CRUSH will place PGs, use `crushtool`:
+
+``` bash
+crushtool -i crushmap.bin --test --rule $ruleid --num-rep $reps --show-mappings
+# other options: --show-bad-mappings
+```
+
+
 ### CephFS
 
 On top of RADOS, Ceph provides a [POSIX filesystem](https://docs.ceph.com/en/latest/cephfs/posix/).
@@ -925,6 +933,28 @@ CephFS quotas work since [Linux 4.17](https://github.com/torvalds/linux/commit/b
 A client with the `s` permission for MDS can manage snapshots.
 A [snapshot](https://docs.ceph.com/en/latest/dev/cephfs-snapshots/) is created by creating a directory: `dir/to/backup/.snap/snapshot_name`.
 
+###### Finding CephFS Snapshots
+
+As snapshots are directories in hidden `.snap` directories, but it's tedious to find them since they can be anywhere and are hidden.
+
+But you can ask the MDS for the snapshot inodes and search for its id
+  - `ceph tell mds.$yourmds dump snaps`
+  - Then [look up the inode, see below](#cephfs-inodes).
+
+
+#### CephFS Inodes
+
+Getting a file name and path for an inode number in CephFS:
+
+```
+# have a inode number of a file with e.g. `ls -li <file>`
+rados -p <cephfs-root-pool> getxattr $(printf %x <inodenumnber>).00000000 parent | ceph-dencoder type inode_backtrace_t import - decode dump_json
+# for directories, you need the <cephfs-metadata-pool> instead!
+```
+
+In the `parent` xattr of an inode object, CephFS stores a `inode_backtrace_t` structure (with a list of `inode_backpointer_t` in `ancestors` as the file path).
+Decoding it gives you the file path.
+
 
 #### CephFS Status
 
@@ -960,16 +990,20 @@ ceph mds repaired $cephfs_name:0
 
 #### Tuning CephFS
 
-* Enable `fast_read` on pools (see below)
-* Enable inline data: Store content for (default <4KB) in inode: `ceph fs set lolfs inline_data yes`
+* Enable `fast_read` on pools - all OSDs in EC pools will be queried instead of only the first `n`.
+* Enable inline data: Store content for (default <4KB) in inode: `ceph fs set lolfs inline_data yes`.
+  "small files" are then stored in the metadatapool without a datapool access needed.
 
 #### MDS Slow ops
 ```
 mds.mds1 [WRN] slow request 30.633018 seconds old, received at 2020-09-12 17:38:03.970677: client_request(client.148012229:9530909 getattr AsLsXsFs #0x100531c49cf
                 caller_uid=3860, caller_gid=3860{}) currently failed to rdlock, waiting
-
-rados -p $cephfs-data-pool getxattr 100531c49cf.00000000 parent | ceph-dencoder type inode_backtrace_t import - decode dump_json
 ```
+
+Here `100531c49cf` is the file inode number.
+
+Then you can get the path of the file [by looking up the inode](#cephfs-inodes)
+
 
 ### RADOS Block Devices RBD
 
@@ -1581,6 +1615,13 @@ For example, I got a funny `active+remapped` when several PGs chose an OSD as ba
 
 If the PG hangs in `down` or `unknown`, you can figure out their 'last primary' with `ceph pg map $pgid`.
 
+There are many causes for this, below are the ones I've encountered so far:
+
+
+#### Stuck after adding new OSDs
+
+Newly added OSDs may be the problem. This may be the case when a PG is stuck `activating+remapped`, and in `ceph pg $pgid query` the backfill target is a new OSD. Have a look at `ceph daemon osd.$id status` and observe if its `"num_pgs"` is at the limit. If this is indeed the problem, increase the PG limit and repeer the new OSD.
+
 If a PG is stuck `activating`, the involved OSDs may have too many PGs and refuses accepting them:
 
 * Soft limit: `mon_max_pg_per_osd = 250`: You'll see a warning.
@@ -1588,18 +1629,27 @@ If a PG is stuck `activating`, the involved OSDs may have too many PGs and refus
 
 At least in versions `<= 14.2.8`, the ONLY the soft-limit will display a warning! When there's PGs **over the hard limit**, NO WARNING is issued (to be fixed).
 
-#### Stuck after adding new OSDs
-
-Newly added OSDs may be the problem. This may be the case when a PG is stuck `activating+remapped`, and in `ceph pg $pgid query` the backfill target is a new OSD. Have a look at `ceph daemon osd.$id status` and observe if its `"num_pgs"` is at the limit. If this is indeed the problem, increase the PG limit and repeer the new OSD.
-
-To lift the limit **temporarily**, tell it all OSDs and MONs:
+To see how many PGs are really on a OSD:
 ```
+ceph tell osd.$id status
+```
+
+To lift the limit **temporarily**, tell it the OSDs:
+```
+# tell it a single server
+for id in $(ceph osd ls-tree $yourserver); do ceph tell osd.$id injectargs '--mon_max_pg_per_osd=2000'; done
+
+# or if you just have given up on life tell it all OSDs
 ceph tell 'osd.*' injectargs -- --mon_max_pg_per_osd=2000
-ceph tell 'mon.*' injectargs -- --mon_max_pg_per_osd=2000
 ```
+
 This config variable [basically blocks accepting PGs in OSDs](https://github.com/ceph/ceph/blob/master/src/osd/OSD.cc).
 
-To then revive the stuck pgs, repeer the newly added OSDs with `ceph osd down $osdid`.
+To then revive the stuck pgs, repeer the newly added OSDs with
+```
+ceph osd down $(ceph osd ls-tree $yournewserver)
+```
+
 If this doesn't fix it, try to repeer primary OSDs of stuck pgs.
 
 Afterwards, make sure to reduce the number of PGs!
@@ -1784,7 +1834,7 @@ Notable Linux kernel feature changes:
 * [Linux 5.3](https://github.com/torvalds/linux/commit/d9b9c893048e9d308a833619f0866f1f52778cf5) [krbd support for `object-map` and `fast-diff`](https://github.com/torvalds/linux/commit/22e8bd51bb0469d1a524130a057f894ff632376a), [selinux xattr support](https://github.com/torvalds/linux/commit/ac6713ccb5a6d13b59a2e3fda4fb049a2c4e0af2)
 * [Linux 5.1](https://github.com/torvalds/linux/commit/2b0a80b0d0bb0a3db74588279bf851b28c6c4705) [krbd support for `deep-flatten`](https://github.com/torvalds/linux/commit/b9f6d447a6f67b2acc3c4a9d9adc2508986e8df9)
 * [Linux 4.19](https://github.com/torvalds/linux/commit/0a78ac4b9bb15b2a00dc5a5aba22b0e48834e1ad) [krbd support for `namespace`](https://github.com/torvalds/linux/commit/b26c047b940003295d3896b7f633a66aab95bebd) (needs Nautilus)
-* [Linux 4.17](https://github.com/torvalds/linux/commit/b284d4d5a6785f8cd07eda2646a95782373cd01e) [CephFS quotas](https://github.com/torvalds/linux/commit/fb18a57568c2b84cd611e242c0f6fa97b45e4907) and snapshot support (recommended)
+* [Linux 4.17](https://github.com/torvalds/linux/commit/b284d4d5a6785f8cd07eda2646a95782373cd01e) [CephFS quotas](https://github.com/torvalds/linux/commit/fb18a57568c2b84cd611e242c0f6fa97b45e4907), snapshot support (recommended), and "krbd fancy striping"
 * [Linux 4.14](https://github.com/torvalds/linux/commit/cdb897e3279ad1677138d6bdf1cfaf1393718a08) CephFS multiple active MDS ([recommended in docs](https://docs.ceph.com/en/latest/cephfs/kernel-features/?highlight=kernel#multiple-active-metadata-servers))
 * [Linux 4.11](https://github.com/torvalds/linux/commit/b2deee2dc06db7cdf99b84346e69bdb9db9baa85) [krbd support for `data-pool` (EC storage)](https://github.com/torvalds/linux/commit/7e97332ea9caad3b7c6d86bc3b982e17eda2f736)
 * [Linux 4.9](https://github.com/torvalds/linux/commit/8dfb790b15e779232d5d4e3f0102af2bea21ca55) [krbd support for `exclusive-lock`](https://github.com/torvalds/linux/commit/ed95b21a4b0a71ef89306cdeb427d53cc9cb343f)
