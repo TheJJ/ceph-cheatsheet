@@ -48,6 +48,8 @@ Released under GPLv3 or any later version.
         - [Namespace](#namespace)
         - [Quota Config](#quota-config)
         - [CephFS Snapshots](#cephfs-snapshots)
+          - [Finding CephFS Snapshots](#finding-cephfs-snapshots)
+      - [CephFS Inodes](#cephfs-inodes)
       - [CephFS Status](#cephfs-status)
     - [MDS Online Scrub](#mds-online-scrub)
       - [Tuning CephFS](#tuning-cephfs)
@@ -937,9 +939,39 @@ A [snapshot](https://docs.ceph.com/en/latest/dev/cephfs-snapshots/) is created b
 
 As snapshots are directories in hidden `.snap` directories, but it's tedious to find them since they can be anywhere and are hidden.
 
-But you can ask the MDS for the snapshot inodes and search for its id
+To figure out where they are, you can:
+- Option 1: Ask the active MDS server for the snapshot inodes:
   - `ceph tell mds.$yourmds dump snaps`
   - Then [look up the inode, see below](#cephfs-inodes).
+
+- Option 2: Get snaps directly from metadata pool. This skips figuring out which MDS is now correct to ask:
+```
+rados -p <cephfs-metadata-pool> get mds_snaptable - | ceph-dencoder type SnapServer skip 8 import - decode dump_json
+```
+```
+{
+    "snapserver": {
+        "last_snap": 6776,
+        "last_created": 6776,
+        "last_destroyed": 6737,
+        "pending_noop": [],
+        "snaps": [
+            {
+                "snapid": 6369,
+                "ino": 6597072470362,
+                "stamp": "2023-11-08T01:00:05.596850+0100",
+                "name": "best-snapshot-name-ever"
+            },
+            {
+                "snapid": 6370,
+                "ino": 1099511699630,
+                "stamp": "2023-11-08T01:00:05.612619+0100",
+                "name": "really-terrible-snapshot-name"
+            },
+            ...
+```
+
+These inode numbers can then also be [resolved](#cephfs-inodes).
 
 
 #### CephFS Inodes
@@ -950,6 +982,32 @@ Getting a file name and path for an inode number in CephFS:
 # have a inode number of a file with e.g. `ls -li <file>`
 rados -p <cephfs-root-pool> getxattr $(printf %x <inodenumnber>).00000000 parent | ceph-dencoder type inode_backtrace_t import - decode dump_json
 # for directories, you need the <cephfs-metadata-pool> instead!
+```
+```
+{
+    "ino": 1099511627850,
+    "ancestors": [
+        {
+            "dirino": 1099511627847,
+            "dname": "cute_kitten.mkv",
+            "version": 902
+        },
+        {
+            "dirino": 1099511627864,
+            "dname": "really_shady_stuff",
+            "version": 913
+        },
+        {
+            "dirino": 1,
+            "dname": "tax_evasion_plans",
+            "version": 10413
+        }
+    ],
+    "pool": 14,
+    "old_pools": [
+        2
+    ]
+}
 ```
 
 In the `parent` xattr of an inode object, CephFS stores a `inode_backtrace_t` structure (with a list of `inode_backpointer_t` in `ancestors` as the file path).
