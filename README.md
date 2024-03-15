@@ -1542,6 +1542,9 @@ ceph osd blacklist add $client_addr
 # you leave the osd running during this command, it will do peering again.
 # if you have stuck PGs it often helps to repeer its primary OSD!
 ceph osd down $osdid
+
+# or repeer a single pg by id
+ceph pg repeer $pgid
 ```
 
 ```
@@ -1667,9 +1670,11 @@ ceph osd pool set $pool pg_autoscale_mode $mode
 
 ### PGs not starting
 
+To just let a pg try establishing its connection between OSDs, do `ceph pg repeer $pgid`.
+
 It very often helps to **restart or repeer the acting primary** of a problematic PG.
-Also, if you do `ceph pg $pgid` query, you can see what peers the PG interacts with (primary, backfill-target, ...). Restarting those can also help.
-For example, I got a funny `active+remapped` when several PGs chose an OSD as backfill target. After restarting that, the PGs became active again.
+Also, if you do `ceph pg $pgid` query, you can see what OSD peers the PG interacts with (primary, backfill-target, ...). Restarting those can also help.
+For example, I got a funny `active+remapped` when several PGs chose an OSD as backfill target. After restarting that OSD, the PGs became active again.
 
 If the PG hangs in `down` or `unknown`, you can figure out their 'last primary' with `ceph pg map $pgid`.
 
