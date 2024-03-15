@@ -63,6 +63,7 @@ Released under GPLv3 or any later version.
       - [LVM on RBD](#lvm-on-rbd)
       - [RBD Status](#rbd-status)
     - [Cluster Performance](#cluster-performance)
+      - [Slow OSD commits](#slow-osd-commits)
       - [Messenger logging](#messenger-logging)
       - [Fast Pool reads](#fast-pool-reads)
       - [Recovery Speed](#recovery-speed)
@@ -1297,7 +1298,16 @@ rbd status $pool/$namespace/$image
 
 ### Cluster Performance
 
-Each OSD should serve **50 to 150 placement groups in total** (see with `ceph osd df tree`).
+Each OSD should serve **50 to 250 placement groups in total** (see with `ceph osd df tree`).
+SSDs can take more (100 to 500), and this can also enhance throughput.
+
+#### Slow OSD commits
+a single device can degrade cluster performance significantly.
+the slowest 15 OSD commit times:
+```
+watch -n 1 'ceph osd perf | sort -n -k3 | tail -n 15'
+```
+look into it if an OSD appears with weird times there!
 
 #### Messenger logging
 
@@ -1402,6 +1412,8 @@ ceph osd df tree name $bucket
 
 # osd commit latency performance
 ceph osd perf
+# top 15 slowest committing osds
+watch -n 1 'ceph osd perf | sort -n -k3 | tail -n 15'
 
 # pg status and performance
 ceph pg stat
