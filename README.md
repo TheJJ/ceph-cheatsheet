@@ -1343,6 +1343,8 @@ osd max backfills = 16
 osd recovery delay start = 30
 ```
 
+`osd recovery max active` and `osd max backfills` require first setting [`osd mclock override recovery settings`](https://docs.ceph.com/en/latest/rados/configuration/mclock-config-ref/#recovery-backfill-options) to true.
+
 #### Crush parameter tuning
 
 Get current crush tunables profile:
