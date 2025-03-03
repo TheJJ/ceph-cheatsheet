@@ -1,7 +1,7 @@
 Ceph Cheatsheet
 ===============
 
-(c) 2018-2024 Jonas Jelten <jj@sft.lol>
+(c) 2018-2025 Jonas Jelten <jj@sft.lol>
 
 Released under GPLv3 or any later version.
 
