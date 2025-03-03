@@ -1,7 +1,7 @@
 Ceph Cheatsheet
 ===============
 
-(c) 2018-2024 Jonas Jelten <jj@sft.lol>
+(c) 2018-2025 Jonas Jelten <jj@sft.lol>
 
 Released under GPLv3 or any later version.
 
@@ -1342,6 +1342,8 @@ osd max backfills = 16
 # wait some time for data to maybe become available again
 osd recovery delay start = 30
 ```
+
+`osd recovery max active` and `osd max backfills` require first setting [`osd mclock override recovery settings`](https://docs.ceph.com/en/latest/rados/configuration/mclock-config-ref/#recovery-backfill-options) to true.
 
 #### Crush parameter tuning
 
