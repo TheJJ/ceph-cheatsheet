@@ -406,6 +406,11 @@ Use `--crush-device-class somename` to assign a device class (any name is possib
 sudo ceph-volume lvm create --dmcrypt --data /dev/partition
 ```
 
+```
+# to reuse an osd-id (must be freed by "ceph osd destroy <id>" first)
+--osd-id <reused-id>
+```
+
 If you use `/dev/partition`, an LVM LV is created:
 * The VG is `ceph-$(uuidgen)` (generated with `python3 -c "import uuid; print(uuid.uuid4())"`)
 * The LV is `osd-block-$(uuidgen)`
