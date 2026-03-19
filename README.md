@@ -1670,6 +1670,20 @@ rbd bench --io-type rw $poolname/$imagename
 # --io-threads $threadcount
 ```
 
+Watch the current throughput and performance of all your RBDs:
+
+``` bash
+rbd perf image iotop
+```
+
+or as a periodic dump of current performance values:
+
+``` bash
+rbd perf image iostat
+# options: --format=json
+```
+
+
 #### CephFS speed
 
 Benchmark a single file within CephFS, or use Bonnie++.
