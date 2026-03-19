@@ -1,7 +1,7 @@
 Ceph Cheatsheet
 ===============
 
-(c) 2018-2025 Jonas Jelten <jj@sft.lol>
+(c) 2018-2026 Jonas Jelten <jj@sft.lol>
 
 Released under GPLv3 or any later version.
 
@@ -1062,6 +1062,21 @@ mds.mds1 [WRN] slow request 30.633018 seconds old, received at 2020-09-12 17:38:
 Here `100531c49cf` is the file inode number.
 
 Then you can get the path of the file [by looking up the inode](#cephfs-inodes)
+
+#### MDS damaged
+
+If an MDS daemon encounters severe errors or times out (due to an OSD timeout), it marks the whole rank as `damaged`.
+
+First, investigate the root cause for the MDS crash that was in the failed rank.
+Look at the MDS logs for this.
+If this just happened due to an OSD timeout, restart the causing OSD, then you can likely just proceed to re-activate (set `repaired`) the rank.
+Otherwise, journal corruption or worse could have happened, which needs [disaster recovery](https://docs.ceph.com/en/latest/cephfs/disaster-recovery/).
+
+To mark the slot available for use by a standby daemon again with to try activating the FS:
+
+```
+ceph mds repaired $cephfs_name:$rank_id
+```
 
 
 ### RADOS Block Devices RBD
